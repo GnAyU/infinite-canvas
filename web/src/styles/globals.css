@@ -1,9 +1,14 @@
 @import "tailwindcss";
 @import "tw-animate-css";
-@import "shadcn/tailwind.css";
+
 @source "../../../node_modules/streamdown/dist/*.js";
 
 @custom-variant dark (&:is(.dark *));
+
+/* Radix Select state variants formerly supplied by the unused shadcn CLI. */
+@custom-variant data-open (&:where([data-state="open"], [data-open]:not([data-open="false"])));
+@custom-variant data-closed (&:where([data-state="closed"], [data-closed]:not([data-closed="false"])));
+@custom-variant data-disabled (&:where([data-disabled="true"], [data-disabled]:not([data-disabled="false"])));
 
 @theme inline {
     --color-background: var(--background);

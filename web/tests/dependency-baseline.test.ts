@@ -17,3 +17,22 @@ test("web uses the approved exact toolchain and explicit lifecycle allowlist", (
     expect(manifest.dependencies).not.toHaveProperty("@ant-design/pro-components");
     expect(manifest.dependencies).not.toHaveProperty("shadcn");
 });
+
+test("the app provider uses only the existing AntD facilities", () => {
+    const provider = read("../src/components/layout/app-providers.tsx");
+    expect(provider).not.toContain("ProConfigProvider");
+    expect(provider).not.toContain("@ant-design/pro-components");
+    expect(provider).toContain('locale={locale === "zh-CN" ? zhCN : enUS}');
+    expect(provider).toContain("theme={getAntThemeConfig(dark)}");
+    expect(provider).toContain("<App>");
+    expect(provider).toContain("<QueryClientProvider");
+    expect(provider).toContain("<ClientRootInit>");
+});
+
+test("removing the shadcn CLI retains the Radix select state styles", () => {
+    const css = read("../src/styles/globals.css");
+    expect(css).not.toContain('"shadcn/tailwind.css"');
+    for (const state of ["open", "closed", "disabled"]) {
+        expect(css).toContain(`@custom-variant data-${state}`);
+    }
+});
