@@ -15,9 +15,9 @@
 - 测试：`cd web && bun run test`；类型检查：`bun run typecheck`；生产构建：`bun run build`，三条分别执行。
 - 需要局域网访问时明确选择：`./scripts/dev.sh --host 0.0.0.0` 或 `./scripts/serve.sh --host 0.0.0.0`。这会暴露服务给网络中的其他设备；不要在不可信网络开放开发服务。额外端口参数也会透传。
 
-`web/bun.lock` 是唯一目标 web 锁；过渡期间旧 npm/pnpm 文件仅保留到替代图验收通过，不作为安装输入。不要复制或修改 companion、docs、plugin 的独立锁。开发脚本每次都冻结安装，不用 node_modules 是否存在来跳过一致性检查，不使用 peer bypass。
+`web/bun.lock` 是唯一权威 web 锁；按 J 的清理顺序决定，仅移除 web 的 npm/pnpm 竞争锁和旧 pnpm 策略，独立评审检查清理后的最终 HEAD。不要复制或修改 companion、docs、plugin 的独立锁。开发脚本每次都冻结安装，不用 node_modules 是否存在来跳过一致性检查，不使用 peer bypass。
 
-`web/bunfig.toml` 固定 registry、冻结安装并关闭自动安装；显式 `trustedDependencies: ["esbuild"]` 替代默认信任表，仅批准锁中的 **esbuild 0.28.2** postinstall。平台可选二进制也受锁和完整性覆盖。其他依赖安装 hook 不获执行授权；发现额外必要 hook 时先审查，不能批量 trust。
+`web/bunfig.toml` 固定 registry、冻结安装并关闭自动安装；显式 `trustedDependencies: ["esbuild"]` 替代默认信任表，仅批准锁中的 **esbuild 0.28.2** postinstall。平台可选二进制也受锁和完整性覆盖。其他依赖安装 hook 不获执行授权；发现额外必要 hook 时先审查，不能批量 trust。冷安装未观测到 esbuild 自动 hook 入口；未手动准备的安装树已通过测试、类型检查与构建，但这不证明 hook 执行，仍交 Viper 明确审查，不静默新增手动 hook 步骤。
 
 ## 构建入口与限制
 

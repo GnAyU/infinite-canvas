@@ -1,7 +1,14 @@
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
+
+test("Bun is the only web lock and obsolete pnpm policy is absent", () => {
+    expect(existsSync(new URL("../bun.lock", import.meta.url))).toBe(true);
+    for (const file of ["package-lock.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"]) {
+        expect(existsSync(new URL(`../${file}`, import.meta.url))).toBe(false);
+    }
+});
 
 test("web uses the approved exact toolchain and explicit lifecycle allowlist", () => {
     const manifest = JSON.parse(read("../package.json"));
