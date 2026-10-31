@@ -1,4 +1,5 @@
 #!/bin/sh
 set -e
+"$(dirname "$0")/check-web-toolchain.sh"
 cd "$(dirname "$0")/../web"
-npm install --legacy-peer-deps --no-audit --no-fund
+bun install --frozen-lockfile --registry=https://registry.npmjs.org

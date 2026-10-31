@@ -1,5 +1,5 @@
 #!/bin/sh
 set -e
+"$(dirname "$0")/setup.sh"
 cd "$(dirname "$0")/../web"
-[ -d node_modules ] || npm install --legacy-peer-deps --no-audit --no-fund
-npm run dev
+bun run dev "$@"

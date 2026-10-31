@@ -1,9 +1,12 @@
 # 构建 Vite 前端产物。
-FROM oven/bun:1.3.13 AS web-build
+FROM oven/bun:1.4.4 AS bun-toolchain
+FROM node:22.23.4-bookworm-slim AS web-build
+COPY --from=bun-toolchain /usr/local/bin/bun /usr/local/bin/bun
 
 WORKDIR /app/web
-COPY web/package.json web/bun.lock ./
-RUN --mount=type=cache,target=/root/.bun/install/cache bun install --cache-dir=/root/.bun/install/cache
+COPY web/package.json web/bun.lock web/bunfig.toml ./
+RUN test "$(bun --version)" = "1.4.4" && test "$(node --version)" = "v22.23.4"
+RUN --mount=type=cache,target=/root/.bun/install/cache bun install --frozen-lockfile --registry=https://registry.npmjs.org --cache-dir=/root/.bun/install/cache
 COPY VERSION /app/VERSION
 COPY CHANGELOG.md /app/CHANGELOG.md
 COPY web ./
