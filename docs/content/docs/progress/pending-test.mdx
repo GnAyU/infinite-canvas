@@ -7,6 +7,8 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- SCOPE-1 web dependency baseline: exact Bun 1.4.4 / Node 22.23.4, frozen npmjs graph, loopback dev/preview with explicit LAN opt-in. Verify normal/config/canvas theme and locale controls after provider removal, Radix select state styling and the unchanged fullscreen script-editor appearance. Separate install/test/typecheck/build/Pages evidence and Docker limitations are recorded on the implementation card; independent final-HEAD review and KaTeX advisory disposition are still required, not release approval.
+
 - Saved model selection: save a canvas node with a model, then remove its provider or remove that model while another video model remains the default. Generation, retry and pending-video recovery should keep the unavailable model selected and open configuration instead of sending a request to the default or first provider. Re-selecting a valid model should allow generation. Changing only the API key on the same provider should preserve the model; switching a config node from a valid image model to video should still use the video default.
 
 - Local storage usage on HTTP deployments: opening the Local storage settings tab at an HTTP origin without `navigator.storage.estimate` should still show IndexedDB content statistics, display an unavailable quota instead of an error, and keep the canvas data unchanged.

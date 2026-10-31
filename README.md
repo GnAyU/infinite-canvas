@@ -136,9 +136,11 @@ AI API Key、Base URL、画布、素材和生成记录默认保存在浏览器�
 git clone git@github.com:basketikun/infinite-canvas.git
 cd infinite-canvas
 cd web
-bun install
+bun install --frozen-lockfile
 bun run dev
 ```
+
+Web 工具链固定为 Bun 1.4.4 / Node 22.23.4，默认仅监听 `127.0.0.1`；标准脚本、显式 LAN 开放与部署限制见 [FORK.md](FORK.md)。
 
 ### Docker 运行
 

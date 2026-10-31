@@ -17,11 +17,13 @@ description: 用最少步骤把无限画布跑起来
 git clone git@github.com:basketikun/infinite-canvas.git
 cd infinite-canvas
 cd web
-bun install
+bun install --frozen-lockfile
 bun run dev
 ```
 
 启动后访问：
+
+使用精确 Bun 1.4.4 和 Node 22.23.4，默认仅监听 loopback。标准脚本、显式 LAN 开放和部署限制见仓库 `FORK.md`；Vercel 不能提供精确工具链时会拒绝构建，尚未验证托管部署。
 
 ```text
 http://localhost:3000
