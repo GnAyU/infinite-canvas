@@ -13,7 +13,7 @@ export async function normalizeMediaBlob(blob: Blob, kind: MediaKind, secrets: s
     const decoder = new TextDecoder();
     let head = "";
     try {
-        while (!head.trim()) {
+        while (!head.trim() || /^\s*<[^>\s]*$/.test(head)) {
             const { value, done } = await reader.read();
             if (done) break;
             head += decoder.decode(value, { stream: true });
@@ -24,7 +24,8 @@ export async function normalizeMediaBlob(blob: Blob, kind: MediaKind, secrets: s
         try { JSON.parse(await blob.text()); json = true; } catch { /* Not a JSON envelope. */ }
         if (json) throw invalidMedia();
     }
-    if (/^\s*<(?:!doctype|html|head|body|script|\?xml|error)\b/i.test(head)) throw invalidMedia();
+    // A leading declaration/comment is itself a textual envelope, even without a root tag.
+    if (/^\s*<(?:!|(?:html|head|body|script|\?xml|error)\b)/i.test(head)) throw invalidMedia();
     return blob.type === type ? blob : new Blob([blob], { type });
 }
 

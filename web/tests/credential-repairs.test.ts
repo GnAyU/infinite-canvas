@@ -140,6 +140,53 @@ test("F4 valid Axios params, FormData and response streams retain auth and redir
 const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3S8AAAAASUVORK5CYII=";
 const mediaReply = (body: string, type: string) => (url: string) => url.includes("predictLongRunning") ? Response.json({ name: task.id }) : url.includes("/operations/") ? Response.json({ done: true, response: { generateVideoResponse: { generatedSamples: [{ video: { uri: `${baseUrl}/media.mp4` } }] } } }) : new Response(body, { headers: { "Content-Type": type } });
 
+const commentError = `<!-- gateway authentication failure -->\n<html><body>Header authentication unsupported; echo ${key}</body></html>`;
+
+test.each(["native-video", "template-video", "native-audio"])("F1 comment-prefixed HTML rejects before %s completion", async (operation: string) => {
+    useConfigStore.setState({ config: defaultConfig, webdav: defaultWebdavSyncConfig });
+    respond = mediaReply(commentError, operation === "native-audio" ? "audio/mpeg" : "video/mp4");
+    calls.length = 0;
+    const run = operation === "native-video" ? pollVideoGenerationTask(configFor("gemini"), task)
+        : operation === "template-video" ? createVideoGenerationTask(configFor("gemini", getPluginTemplates().video[1].script), "synthetic")
+        : requestAudioGeneration(configFor(), "synthetic");
+    await expect(run).rejects.toThrow("渠道未返回有效媒体");
+    expect(calls.filter((call) => call.request?.method !== "OPTIONS")).toHaveLength(operation === "native-video" ? 2 : operation === "template-video" ? 3 : 1);
+    expect(calls.every((call) => !call.url.includes(key))).toBe(true);
+});
+
+test.each((["image", "audio", "video"] as const).flatMap((kind) => ["blob", "record.blob", "inline", "url"].map((form) => ({ kind, form }))))("F1 comment-prefixed HTML rejects $kind script $form before results", async ({ kind, form }: { kind: "image" | "audio" | "video"; form: string }) => {
+    const type = kind === "image" ? "image/png" : kind === "audio" ? "audio/mpeg" : "video/mp4";
+    const blob = `new Blob([${JSON.stringify(commentError)}],{type:${JSON.stringify(type)}})`;
+    const source = form === "blob" ? blob : form === "record.blob" ? `{blob:${blob}}`
+        : form === "inline" ? JSON.stringify(`data:${type};base64,${btoa(commentError)}`) : `{url:baseUrl+'/media.mp4'}`;
+    respond = () => new Response(commentError, { headers: { "Content-Type": type } });
+    calls.length = 0;
+    const config = configFor("openai", `return ${source};`);
+    const run = kind === "audio" ? requestAudioGeneration(config, "synthetic") : kind === "video" ? createVideoGenerationTask(config, "synthetic") : requestGeneration(config, "synthetic");
+    await expect(run).rejects.toThrow("渠道未返回有效媒体");
+    expect(calls).toHaveLength(form === "url" ? 1 : 0);
+});
+
+test("F1 leading declarations reject across stream boundaries without scanning binary media", async () => {
+    const { normalizeMediaBlob, inlineMediaBlob } = await import("../src/services/api/media-result");
+    for (const body of [commentError, `\ufeff \n<!-- first -->\n<!-- second -->\n${commentError}`, "<!-- unfinished comment", "<!DOCTYPE html><html>authentication failed</html>", "<?xml version='1.0'?><error>authentication failed</error>", "<html>authentication failed</html>"]) {
+        for (const kind of ["image", "audio", "video"] as const) {
+            const type = `${kind}/${kind === "image" ? "png" : kind === "audio" ? "mpeg" : "mp4"}`;
+            const blob = new Blob([body], { type });
+            Object.defineProperty(blob, "stream", { value: () => new ReadableStream({ start(controller) {
+                for (const char of body) controller.enqueue(new TextEncoder().encode(char));
+                controller.close();
+            } }) });
+            await expect(normalizeMediaBlob(blob, kind)).rejects.toThrow("渠道未返回有效媒体");
+            await expect(inlineMediaBlob(`data:${type},${encodeURIComponent(body)}`, kind)).rejects.toThrow("渠道未返回有效媒体");
+        }
+    }
+    for (const [kind, bytes] of [["image", Buffer.from(png, "base64")], ["video", Buffer.from([0, 0, 0, 24, ...Buffer.from("ftypmp42<!-- media metadata -->")])], ["audio", Buffer.from("RIFF\u0000\u0000\u0000\u0000WAVE<!-- media metadata -->")]] as const) {
+        const blob = new Blob([bytes], { type: `${kind}/${kind === "image" ? "png" : kind === "audio" ? "wav" : "mp4"}` });
+        expect(await normalizeMediaBlob(blob, kind)).toBe(blob);
+    }
+});
+
 test("F1 native and shipped-template video reject HTTP-200 JSON/HTML/text media before caching a task", async () => {
     for (const [body, type] of [[JSON.stringify({ error: { message: `echo ${key}` } }), "application/json"], [`<html>authentication unsupported ${key}</html>`, "text/html"], [`authentication unsupported ${key}`, "text/plain"], [JSON.stringify({ error: { message: `echo ${key}` } }), "video/mp4"]]) {
         respond = mediaReply(body, type);
@@ -174,6 +221,17 @@ test("F1 image downloads reject known error envelopes even with image MIME", asy
     for (const type of ["application/json", "text/html", "image/png"]) {
         respond = (url) => url.includes("/images/") ? Response.json({ data: [{ url: `${baseUrl}/error.png` }] }) : new Response(JSON.stringify({ error: { message: `echo ${key}` } }), { headers: { "Content-Type": type } });
         await expect(requestGeneration(configFor(), "synthetic")).rejects.toThrow();
+    }
+});
+
+test("F1 native OpenAI and Gemini reject comment-prefixed HTML in inline, fileData and remote images", async () => {
+    for (const format of ["openai", "gemini"] as const) {
+        for (const route of ["inline", "fileData", "remote"] as const) {
+            const source = route === "remote" ? `${baseUrl}/error.png` : `data:image/png;base64,${btoa(commentError)}`;
+            respond = (url) => url.endsWith("/error.png") ? new Response(commentError, { headers: { "Content-Type": "image/png" } })
+                : Response.json(format === "openai" ? { data: [{ url: source }] } : { candidates: [{ content: { parts: [route === "inline" ? { inlineData: { data: btoa(commentError), mimeType: "image/png" } } : { fileData: { fileUri: source, mimeType: "image/png" } }] } }] });
+            await expect(requestGeneration(configFor(format), "synthetic")).rejects.toThrow("渠道未返回有效媒体");
+        }
     }
 });
 
