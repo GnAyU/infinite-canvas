@@ -7,7 +7,7 @@ const storage = { getItem: () => null, setItem: () => {}, removeItem: () => {} }
 Object.defineProperty(globalThis, "localStorage", { configurable: true, value: storage });
 Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage: storage, setTimeout, clearTimeout } });
 const { defaultConfig, defaultWebdavSyncConfig, useConfigStore } = await import("../src/stores/use-config-store");
-const { redactText, logError } = await import("../src/lib/secret-redaction");
+const { redactText, redactLogValue, logError, logInfo } = await import("../src/lib/secret-redaction");
 const { runModelPlugin, getPluginTemplates } = await import("../src/services/api/model-plugin");
 const { pollVideoGenerationTask, createVideoGenerationTask } = await import("../src/services/api/video");
 const { channelAxios } = await import("../src/services/api/channel-request");
@@ -45,6 +45,29 @@ afterAll(() => {
 });
 
 const encoded = (value: string) => `%${value.charCodeAt(0).toString(16)}${value.slice(1)}`;
+
+test("F3 unknown Error.name is never emitted without configured secret context", () => {
+    useConfigStore.setState({ config: defaultConfig, webdav: defaultWebdavSyncConfig });
+    const canary = "unstored_error_name_canary";
+    const before = JSON.stringify(useConfigStore.getState());
+    expect(before).not.toContain(canary);
+    const error = new Error("safe message"); error.name = canary;
+    const output: unknown[] = [], savedError = console.error, savedInfo = console.info;
+    console.error = console.info = (...args) => { output.push(args); };
+    try {
+        logError(error);
+        logInfo({ nested: [error] });
+    } finally { console.error = savedError; console.info = savedInfo; }
+    expect(JSON.stringify(output)).not.toContain(canary);
+    expect(redactLogValue(error)).toEqual({ name: "Error", message: "safe message" });
+    expect(output).toEqual([[{ name: "Error", message: "safe message" }], [{ nested: [{ name: "Error", message: "safe message" }] }]]);
+    for (const name of ["Error", "EvalError", "RangeError", "ReferenceError", "SyntaxError", "TypeError", "URIError", "AggregateError", "AbortError", "TimeoutError"]) {
+        const control = new Error("safe message"); control.name = name;
+        expect(redactLogValue(control)).toEqual({ name, message: "safe message" });
+    }
+    expect(JSON.stringify(useConfigStore.getState())).toBe(before);
+    expect(error.name).toBe(canary);
+});
 
 test("F3 logger sanitizes every emitted field, decoded URL names and WebDAV controls without mutating settings", () => {
     const username = "repair_dav_user", password = "repair_dav_password", unknown = "unknown_query_canary";

@@ -2,6 +2,7 @@ import { useConfigStore } from "@/stores/use-config-store";
 
 const REDACTED = "[REDACTED]";
 const secretField = /^(?:key|authorization|proxy-authorization|x-goog-api-key|api[-_]?key|password|username|token|access[-_]?token|secret|credential)$/i;
+const safeErrorNames = new Set(["Error", "EvalError", "RangeError", "ReferenceError", "SyntaxError", "TypeError", "URIError", "AggregateError", "AbortError", "TimeoutError"]);
 
 function decodeLogText(value: string) {
     let text = value;
@@ -39,7 +40,11 @@ export function redactLogValue(value: unknown, seen = new WeakSet<object>()): un
     if (!value || typeof value !== "object") return value;
     if (seen.has(value)) return "[Circular]";
     seen.add(value);
-    if (value instanceof Error) return { name: redactText(value.name), message: redactText(value.message) };
+    if (value instanceof Error) {
+        // Custom names can contain credentials absent from the configured secret context.
+        const name = redactText(value.name);
+        return { name: safeErrorNames.has(name) ? name : "Error", message: redactText(value.message) };
+    }
     if (value instanceof Headers) return redactLogValue(Object.fromEntries(value.entries()), seen);
     if (Array.isArray(value)) return value.map((item) => redactLogValue(item, seen));
     return Object.fromEntries(Object.entries(value).map(([key, item]) => [redactText(key), secretField.test(decodeLogText(key)) ? REDACTED : redactLogValue(item, seen)]));
