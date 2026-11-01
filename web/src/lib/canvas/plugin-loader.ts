@@ -3,6 +3,7 @@ import { getPluginRuntime } from "@/lib/canvas/plugin-runtime";
 import { usePluginStore, type InstalledPlugin } from "@/stores/canvas/use-plugin-store";
 import type { CanvasPlugin } from "@/types/canvas-plugin";
 import i18n from "@/i18n";
+import { logError, logInfo } from "@/lib/secret-redaction";
 
 const cleanups = new Map<string, () => void>();
 
@@ -105,7 +106,7 @@ export async function ensurePluginsLoaded() {
                 const source = record.local ? await fetchPluginSource(withCacheBust(record.url)) : record.source;
                 activatePlugin(await evaluatePluginSource(source));
             } catch (error) {
-                console.error(`[plugin] Failed to load: ${record.id}`, error);
+                logError(`[plugin] Failed to load: ${record.id}`, error);
             }
         }),
     );
@@ -142,7 +143,7 @@ async function loadLocalPlugins() {
                     local: true,
                 });
             } catch (error) {
-                console.error(`[plugin] Failed to discover local plugin: ${url}`, error);
+                logError(`[plugin] Failed to discover local plugin: ${url}`, error);
             }
         }),
     );
@@ -161,9 +162,9 @@ async function loadDevPlugins() {
                 const plugin = await evaluatePluginSource(source);
                 deactivatePlugin(plugin.id);
                 activatePlugin(plugin);
-                console.info(`[plugin] Dev plugin loaded: ${plugin.id} (${url})`);
+                logInfo(`[plugin] Dev plugin loaded: ${plugin.id} (${url})`);
             } catch (error) {
-                console.error(`[plugin] Failed to load dev plugin: ${url}`, error);
+                logError(`[plugin] Failed to load dev plugin: ${url}`, error);
             }
         }),
     );

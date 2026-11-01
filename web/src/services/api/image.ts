@@ -1,10 +1,12 @@
 import axios from "axios";
+import { redactText } from "@/lib/secret-redaction";
+import { channelAxios, channelFetch } from "./channel-request";
 
 import i18n from "@/i18n";
 import { buildApiUrl, resolveModelRequestConfig, resolveModelScript, withLocalProxy, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
 import { normalizePluginImages, runModelPlugin } from "./model-plugin";
 import { nanoid } from "nanoid";
-import { dataUrlToFile } from "@/lib/image-utils";
+import { dataUrlToFile, readFileAsDataUrl } from "@/lib/image-utils";
 import { buildImageReferencePromptText } from "@/lib/image-reference-prompt";
 import { imageToDataUrl } from "@/services/image-storage";
 import { imageSizePresets, inferMediaScale } from "@/lib/media-size";
@@ -220,7 +222,7 @@ function resolveImageSource(item: Record<string, unknown>) {
     return null;
 }
 
-function parseImagePayload(payload: ImageApiResponse) {
+async function parseImagePayload(config: AiConfig, payload: ImageApiResponse, options?: RequestOptions) {
     if (typeof payload.code === "number" && payload.code !== 0) {
         throw new Error(payload.msg || apiText("requestFailed"));
     }
@@ -242,7 +244,18 @@ function parseImagePayload(payload: ImageApiResponse) {
             : apiText("noImageReturned"));
     }
 
-    return images;
+    return localImageResults(config, images, options);
+}
+
+async function localImageResults(config: AiConfig, images: Array<{ id: string; dataUrl: string }>, options?: RequestOptions) {
+    return Promise.all(images.map(async (image) => {
+        if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+        if (image.dataUrl.startsWith("data:")) return image;
+        const response = await channelFetch(config, image.dataUrl, { headers: config.apiFormat === "gemini" ? geminiHeaders(config) : aiHeaders(config), signal: options?.signal });
+        const blob = await response.blob();
+        const dataUrl = await readFileAsDataUrl(new File([blob], "generated-image", { type: blob.type }));
+        return { ...image, dataUrl };
+    }));
 }
 
 function readApiErrorMessage(value: unknown): string {
@@ -277,7 +290,11 @@ function readApiErrorMessage(value: unknown): string {
     );
 }
 
-function readAxiosError(error: unknown, fallback: string) {
+function readAxiosError(error: unknown, fallback: string, apiKey: string) {
+    return redactText(readRequestError(error, fallback), [apiKey]);
+}
+
+function readRequestError(error: unknown, fallback: string) {
     if (axios.isCancel(error)) return apiText("requestCanceled");
     if (axios.isAxiosError(error)) {
         if (error.code === "ECONNABORTED" || error.code === "ETIMEDOUT") return apiText("imageTimeout");
@@ -470,7 +487,7 @@ function consumeResponseStreamText(state: ResponseStreamState, text: string, onD
 }
 
 async function requestStreamingResponse(config: AiConfig, body: Record<string, unknown>, onDelta?: (text: string) => void, options?: RequestOptions): Promise<ToolResponseResult> {
-    const response = await fetch(aiApiUrl(config, "/responses"), {
+    const response = await channelFetch(config, aiApiUrl(config, "/responses"), {
         method: "POST",
         headers: { ...aiHeaders(config, "application/json"), Accept: "text/event-stream" },
         body: JSON.stringify({ ...body, stream: true }),
@@ -577,7 +594,7 @@ function toGeminiToolOptions(tools: ResponseFunctionTool[], toolChoice: ToolChoi
 }
 
 async function requestGeminiStreamingResponse(config: AiConfig, body: Record<string, unknown>, onDelta?: (text: string) => void, options?: RequestOptions): Promise<ToolResponseResult> {
-    const response = await fetch(`${geminiApiUrl(config, "streamGenerateContent")}?alt=sse`, {
+    const response = await channelFetch(config, `${geminiApiUrl(config, "streamGenerateContent")}?alt=sse`, {
         method: "POST",
         headers: geminiHeaders(config),
         body: JSON.stringify(body),
@@ -664,15 +681,15 @@ async function requestGeminiImagesOnce(config: AiConfig, prompt: string, referen
     for (const image of references) {
         parts.push(toGeminiImagePart(await imageToDataUrl(image)));
     }
-    const response = await axios.post<GeminiPayload>(
-        geminiApiUrl(config, "generateContent"),
-        {
+    const response = await channelAxios<GeminiPayload>(config, geminiApiUrl(config, "generateContent"), {
+        method: "POST",
+        data: {
             ...toGeminiBody(config, [{ role: "user", content: prompt }], { generationConfig: { responseModalities: ["TEXT", "IMAGE"], ...resolveGeminiImageConfig(config) } }),
             contents: [{ role: "user", parts }],
         },
-        { headers: geminiHeaders(config), signal: options?.signal, timeout: IMAGE_REQUEST_TIMEOUT_MS },
-    );
-    return parseGeminiImagePayload(response.data);
+        headers: geminiHeaders(config), signal: options?.signal, timeout: IMAGE_REQUEST_TIMEOUT_MS,
+    });
+    return localImageResults(config, parseGeminiImagePayload(response.data), options);
 }
 
 function parseGeminiImagePayload(payload: GeminiPayload) {
@@ -709,25 +726,25 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
                 params: { size: requestSize, resolution: inferMediaScale(config.size), quality, count: n, ...(background ? { background } : {}) },
                 signal: options?.signal,
             });
-            return normalizePluginImages(result).map((dataUrl) => ({ id: nanoid(), dataUrl }));
+            return await localImageResults(requestConfig, normalizePluginImages(result).map((dataUrl) => ({ id: nanoid(), dataUrl })), options);
         } catch (error) {
-            throw new Error(readAxiosError(error, apiText("requestFailed")));
+            throw new Error(readAxiosError(error, apiText("requestFailed"), requestConfig.apiKey));
         }
     }
     if (requestConfig.apiFormat === "gemini") {
         try {
             return await requestGeminiImages(requestConfig, prompt, [], n, options);
         } catch (error) {
-            throw new Error(readAxiosError(error, apiText("requestFailed")));
+            throw new Error(readAxiosError(error, apiText("requestFailed"), requestConfig.apiKey));
         }
     }
     const quality = normalizeQuality(config.quality);
     const requestSize = resolveRequestSize(config.size);
     const background = normalizeBackground(config.background);
     try {
-        const response = await axios.post<ImageApiResponse>(
-            aiApiUrl(requestConfig, "/images/generations"),
-            {
+        const response = await channelAxios<ImageApiResponse>(requestConfig, aiApiUrl(requestConfig, "/images/generations"), {
+            method: "POST",
+            data: {
                 model: requestConfig.model,
                 prompt: withSystemPrompt(requestConfig, prompt),
                 n,
@@ -738,16 +755,14 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
                 ...(/gpt-image/.test(requestConfig.model) ? {} : { response_format: "b64_json" }),
                 output_format: IMAGE_OUTPUT_FORMAT,
             },
-            {
-                headers: aiHeaders(requestConfig, "application/json"),
-                signal: options?.signal,
-                timeout: IMAGE_REQUEST_TIMEOUT_MS,
-            },
-        );
-        const images = await parseImagePayload(response.data);
+            headers: aiHeaders(requestConfig, "application/json"),
+            signal: options?.signal,
+            timeout: IMAGE_REQUEST_TIMEOUT_MS,
+        });
+        const images = await parseImagePayload(requestConfig, response.data, options);
         return images;
     } catch (error) {
-        throw new Error(readAxiosError(error, apiText("requestFailed")));
+        throw new Error(readAxiosError(error, apiText("requestFailed"), requestConfig.apiKey));
     }
 }
 
@@ -771,16 +786,16 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
                 params: { size: requestSize, resolution: inferMediaScale(config.size), quality, count: n, ...(background ? { background } : {}) },
                 signal: options?.signal,
             });
-            return normalizePluginImages(result).map((dataUrl) => ({ id: nanoid(), dataUrl }));
+            return await localImageResults(requestConfig, normalizePluginImages(result).map((dataUrl) => ({ id: nanoid(), dataUrl })), options);
         } catch (error) {
-            throw new Error(readAxiosError(error, apiText("requestFailed")));
+            throw new Error(readAxiosError(error, apiText("requestFailed"), requestConfig.apiKey));
         }
     }
     if (requestConfig.apiFormat === "gemini") {
         try {
             return await requestGeminiImages(requestConfig, requestPrompt, references, n, options);
         } catch (error) {
-            throw new Error(readAxiosError(error, apiText("requestFailed")));
+            throw new Error(readAxiosError(error, apiText("requestFailed"), requestConfig.apiKey));
         }
     }
 
@@ -810,11 +825,11 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     files.forEach((file) => formData.append(imageField, file));
 
     try {
-        const response = await axios.post<ImageApiResponse>(aiApiUrl(requestConfig, "/images/edits"), formData, { headers: aiHeaders(requestConfig), signal: options?.signal, timeout: IMAGE_REQUEST_TIMEOUT_MS });
-        const images = await parseImagePayload(response.data);
+        const response = await channelAxios<ImageApiResponse>(requestConfig, aiApiUrl(requestConfig, "/images/edits"), { method: "POST", data: formData, headers: aiHeaders(requestConfig), signal: options?.signal, timeout: IMAGE_REQUEST_TIMEOUT_MS });
+        const images = await parseImagePayload(requestConfig, response.data, options);
         return images;
     } catch (error) {
-        throw new Error(readAxiosError(error, apiText("requestFailed")));
+        throw new Error(readAxiosError(error, apiText("requestFailed"), requestConfig.apiKey));
     }
 }
 
@@ -835,7 +850,7 @@ export async function requestImageQuestion(config: AiConfig, messages: AiTextMes
             if (text === apiText("noContent")) onDelta(text);
             return text;
         } catch (error) {
-            throw new Error(readAxiosError(error, apiText("requestFailed")));
+            throw new Error(readAxiosError(error, apiText("requestFailed"), requestConfig.apiKey));
         }
     }
     try {
@@ -852,21 +867,21 @@ export async function requestImageQuestion(config: AiConfig, messages: AiTextMes
         if (answer === apiText("noContent")) onDelta(answer);
         return answer;
     } catch (error) {
-        throw new Error(readAxiosError(error, apiText("requestFailed")));
+        throw new Error(readAxiosError(error, apiText("requestFailed"), requestConfig.apiKey));
     }
 }
 
 export async function fetchImageModels(config: Pick<AiConfig, "baseUrl" | "apiKey" | "apiFormat">) {
     try {
         if (config.apiFormat === "gemini") {
-            const response = await axios.get<GeminiPayload>(geminiApiUrl({ ...defaultGeminiConfig, ...config }), { headers: geminiHeaders({ ...defaultGeminiConfig, ...config }) });
+            const response = await channelAxios<GeminiPayload>(config, geminiApiUrl({ ...defaultGeminiConfig, ...config }), { headers: geminiHeaders({ ...defaultGeminiConfig, ...config }) });
             validateGeminiPayload(response.data);
             return (response.data.models || [])
                 .map((model) => model.name?.replace(/^models\//, ""))
                 .filter((id): id is string => Boolean(id))
                 .sort((a, b) => a.localeCompare(b));
         }
-        const response = await axios.get<{ data?: Array<{ id?: string }>; error?: { message?: string } }>(buildApiUrl(config.baseUrl, "/models"), {
+        const response = await channelAxios<{ data?: Array<{ id?: string }>; error?: { message?: string } }>(config, buildApiUrl(config.baseUrl, "/models"), {
             headers: {
                 Authorization: `Bearer ${config.apiKey}`,
             },
@@ -876,7 +891,7 @@ export async function fetchImageModels(config: Pick<AiConfig, "baseUrl" | "apiKe
             .filter((id): id is string => Boolean(id))
             .sort((a, b) => a.localeCompare(b));
     } catch (error) {
-        throw new Error(readAxiosError(error, apiText("modelReadFailed")));
+        throw new Error(readAxiosError(error, apiText("modelReadFailed"), config.apiKey));
     }
 }
 

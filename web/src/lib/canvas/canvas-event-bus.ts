@@ -1,4 +1,5 @@
 import localforage from "localforage";
+import { logError } from "@/lib/secret-redaction";
 
 import type { PluginStorage } from "@/types/canvas-plugin";
 
@@ -11,7 +12,7 @@ export function emitCanvasEvent(event: string, payload?: unknown) {
         try {
             handler(payload);
         } catch (error) {
-            console.error(`[canvas-event] handler for "${event}" failed`, error);
+            logError(`[canvas-event] handler for "${event}" failed`, error);
         }
     });
 }

@@ -1,9 +1,11 @@
 import axios from "axios";
+import { redactText } from "@/lib/secret-redaction";
+import { channelAxios, channelFetch } from "./channel-request";
 
 import i18n from "@/i18n";
 import { audioMimeType, normalizeAudioFormatValue, normalizeAudioSpeedValue, normalizeAudioVoiceValue } from "@/lib/audio-generation";
 import { uploadMediaFile, type UploadedFile } from "@/services/file-storage";
-import { buildApiUrl, resolveModelRequestConfig, resolveModelScript, withLocalProxy, type AiConfig } from "@/stores/use-config-store";
+import { buildApiUrl, resolveModelRequestConfig, resolveModelScript, type AiConfig } from "@/stores/use-config-store";
 import { runModelPlugin } from "./model-plugin";
 
 type RequestOptions = { signal?: AbortSignal };
@@ -38,18 +40,18 @@ export async function requestAudioGeneration(config: AiConfig, prompt: string, o
                 params: { voice: normalizeAudioVoiceValue(config.audioVoice), format, speed: normalizeAudioSpeedValue(config.audioSpeed), instructions: config.audioInstructions.trim() },
                 signal: options?.signal,
             });
-            return await audioPluginBlob(result, format);
+            return await audioPluginBlob(requestConfig, result, format, options);
         } catch (error) {
-            throw new Error(readAxiosError(error, apiText("audioGenerationFailed")));
+            throw new Error(readAxiosError(error, apiText("audioGenerationFailed"), requestConfig.apiKey));
         }
     }
     assertAudioConfig(requestConfig, model);
     const instructions = config.audioInstructions.trim();
 
     try {
-        const response = await axios.post<Blob>(
-            aiApiUrl(requestConfig, "/audio/speech"),
-            {
+        const response = await channelAxios<Blob>(requestConfig, aiApiUrl(requestConfig, "/audio/speech"), {
+            method: "POST",
+            data: {
                 model,
                 input: prompt,
                 voice: normalizeAudioVoiceValue(config.audioVoice),
@@ -57,16 +59,16 @@ export async function requestAudioGeneration(config: AiConfig, prompt: string, o
                 speed: Number(normalizeAudioSpeedValue(config.audioSpeed)),
                 ...(instructions ? { instructions } : {}),
             },
-            { headers: aiHeaders(requestConfig), responseType: "blob", signal: options?.signal },
-        );
+            headers: aiHeaders(requestConfig), responseType: "blob", signal: options?.signal,
+        });
         await assertAudioBlob(response.data);
         return response.data.type.startsWith("audio/") ? response.data : new Blob([response.data], { type: audioMimeType(format) });
     } catch (error) {
-        throw new Error(readAxiosError(error, apiText("audioGenerationFailed")));
+        throw new Error(readAxiosError(error, apiText("audioGenerationFailed"), requestConfig.apiKey));
     }
 }
 
-async function audioPluginBlob(result: unknown, format: string): Promise<Blob> {
+async function audioPluginBlob(config: AiConfig, result: unknown, format: string, options?: RequestOptions): Promise<Blob> {
     if (result instanceof Blob) return result.type.startsWith("audio/") ? result : new Blob([result], { type: audioMimeType(format) });
     let source = "";
     if (typeof result === "string") source = result;
@@ -76,7 +78,8 @@ async function audioPluginBlob(result: unknown, format: string): Promise<Blob> {
     }
     if (!source) throw new Error(apiText("scriptNoAudio"));
     const url = source.startsWith("data:") || /^https?:/i.test(source) ? source : `data:${audioMimeType(format)};base64,${source}`;
-    const blob = await (await fetch(withLocalProxy(url))).blob();
+    const response = url.startsWith("data:") ? await fetch(url, { signal: options?.signal }) : await channelFetch(config, url, { headers: aiHeaders(config), signal: options?.signal });
+    const blob = await response.blob();
     return blob.type.startsWith("audio/") ? blob : new Blob([blob], { type: audioMimeType(format) });
 }
 
@@ -132,7 +135,11 @@ function readApiErrorMessage(value: unknown): string {
     );
 }
 
-function readAxiosError(error: unknown, fallback: string) {
+function readAxiosError(error: unknown, fallback: string, apiKey: string) {
+    return redactText(readRequestError(error, fallback), [apiKey]);
+}
+
+function readRequestError(error: unknown, fallback: string) {
     if (axios.isCancel(error)) return apiText("requestCanceled");
     if (axios.isAxiosError(error)) {
         if (!error.response && error.code === "ERR_NETWORK") return apiText("requestFailed");

@@ -1,5 +1,6 @@
 import i18n from "@/i18n";
 import { withLocalProxy, type WebdavSyncConfig } from "@/stores/use-config-store";
+import { assertCredentialFreeUrl } from "@/services/api/channel-request";
 
 export const WEBDAV_MANIFEST_FILE_NAME = "manifest.json";
 const WEBDAV_REQUEST_TIMEOUT_MS = 120000;
@@ -73,13 +74,18 @@ async function webdavDirectoryExists(config: WebdavSyncConfig, path: string) {
 }
 
 async function webdavFetch(config: WebdavSyncConfig, path: string, init: RequestInit) {
+    const base = assertCredentialFreeUrl(config.url.trim(), [config.username, config.password]);
+    if (base.protocol !== "https:" || base.search) throw new Error("WebDAV 仅支持 HTTPS 精确来源与请求头认证；HTTP 端点未获授权，请联系 J/Tom。");
+    const url = withLocalProxy(buildWebdavUrl(config, path));
+    if (assertCredentialFreeUrl(url, [config.username, config.password]).origin !== base.origin) throw new Error("WebDAV 请求来源不匹配，已拒绝发送。");
     const headers = new Headers(init.headers);
     if (config.username || config.password) headers.set("Authorization", `Basic ${encodeBasicAuth(`${config.username}:${config.password}`)}`);
     const controller = new AbortController();
     const timer = window.setTimeout(() => controller.abort(), WEBDAV_REQUEST_TIMEOUT_MS);
     try {
-        const url = withLocalProxy(buildWebdavUrl(config, path));
-        return await fetch(url, { ...init, headers, signal: controller.signal });
+        const response = await fetch(url, { ...init, headers, signal: controller.signal, redirect: "error", credentials: "omit", referrerPolicy: "no-referrer" });
+        if (response.redirected || response.type === "opaqueredirect" || (response.status >= 300 && response.status < 400)) throw new Error("WebDAV 不允许重定向，请配置最终 HTTPS 地址。");
+        return response;
     } catch (error) {
         if (error instanceof Error && error.name === "AbortError") throw new Error(webdavText("requestTimeout"));
         if (error instanceof TypeError) throw new Error(webdavText("connectionFailed"));
@@ -105,10 +111,9 @@ function assertWebdavConfig(config: WebdavSyncConfig) {
 }
 
 async function throwWebdavError(response: Response, fallback: string): Promise<never> {
-    const detail = await response.text().catch(() => "");
     if (response.status === 401 || response.status === 403) throw new Error(webdavText("authenticationFailed"));
     if (response.status === 404) throw new Error(webdavText("pathMissing"));
-    throw new Error(webdavText("responseFailed", { fallback, status: response.status, detail: detail ? ` ${detail.slice(0, 120)}` : "" }));
+    throw new Error(webdavText("responseFailed", { fallback, status: response.status, detail: "" }));
 }
 
 function encodeBasicAuth(value: string) {

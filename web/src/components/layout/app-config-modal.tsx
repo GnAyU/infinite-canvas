@@ -1,4 +1,4 @@
-import { App, Button, Form, Input, Modal, Progress, Radio, Select, Switch, Tabs } from "antd";
+import { Alert, App, Button, Form, Input, Modal, Progress, Radio, Select, Switch, Tabs } from "antd";
 import type { TFunction } from "i18next";
 import { Cloud, Download, Pencil, Plus, RefreshCw, Trash2, Upload, Wifi } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -17,6 +17,7 @@ import { testWebdavConnection, WEBDAV_MANIFEST_FILE_NAME } from "@/services/webd
 import { audioFormatOptions, audioVoiceOptions, normalizeAudioSpeedValue } from "@/lib/audio-generation";
 import { computeMediaSize, inferMediaRatio, inferMediaScale, mediaScaleOptions, parseVideoResolution } from "@/lib/media-size";
 import { createModelChannel, modelOptionsFromChannels, normalizeModelOptionValue, selectableModelsByCapability, useConfigStore, type AiConfig, type ApiCallFormat, type ConfigTabKey, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
+import { channelPlaintextWarning } from "@/stores/use-config-store";
 
 type ModelGroup = {
     capability: ModelCapability;
@@ -86,8 +87,9 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
 
     const loadConfigFile = async (file: File) => {
         try {
-            await importAppConfig(file);
-            message.success(t("config.imported"));
+            const { warnings } = await importAppConfig(file);
+            if (warnings.length) message.warning(warnings.join("\n"));
+            else message.success(t("config.imported"));
         } catch (error) {
             message.error(error instanceof Error ? error.message : t("config.importFailed"));
         } finally {
@@ -113,6 +115,8 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
 
     const saveChannel = (channel: ModelChannel) => {
         updateChannels(config.channels.map((item) => (item.id === channel.id ? channel : item)));
+        const warning = channelPlaintextWarning(channel.baseUrl);
+        if (warning) message.warning(warning);
     };
 
     const testWebdav = async () => {
@@ -167,6 +171,7 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
 
     return (
         <>
+            {config.channels.some((channel) => channelPlaintextWarning(channel.baseUrl)) ? <Alert className="mb-4" type="warning" showIcon title="HTTP 明文渠道警告（含导入的渠道）" description={config.channels.map((channel) => channelPlaintextWarning(channel.baseUrl)).find(Boolean)} /> : null}
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-stone-200 pb-3 dark:border-stone-800">
                 <div className="text-xs text-stone-500">{t("config.fileSecurity")}</div>
                 <div className="flex gap-2">

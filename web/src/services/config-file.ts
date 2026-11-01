@@ -1,7 +1,7 @@
 import { saveAs } from "file-saver";
 
 import i18n from "@/i18n";
-import { useConfigStore, type AiConfig, type WebdavSyncConfig } from "@/stores/use-config-store";
+import { channelPlaintextWarning, useConfigStore, type AiConfig, type WebdavSyncConfig } from "@/stores/use-config-store";
 import { usePromptSourceStore, type PromptSourceSchedule } from "@/stores/use-prompt-source-store";
 import type { PromptSource } from "@/services/api/prompt-source-presets";
 
@@ -34,4 +34,5 @@ export async function importAppConfig(file: File) {
     if (data.app !== "infinite-canvas" || data.version !== 1 || !data.config || !data.webdav || !data.promptSources) throw new Error(i18n.t("config.invalidFile"));
     useConfigStore.setState({ config: data.config, webdav: data.webdav });
     usePromptSourceStore.setState(data.promptSources);
+    return { warnings: [...new Set(data.config.channels.map((channel) => channelPlaintextWarning(channel.baseUrl)).filter(Boolean))] };
 }

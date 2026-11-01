@@ -1,7 +1,9 @@
 import axios, { type AxiosRequestConfig } from "axios";
 
 import i18n from "@/i18n";
-import { buildApiUrl, withLocalProxy, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
+import { redactText } from "@/lib/secret-redaction";
+import { type AiConfig, type ModelCapability } from "@/stores/use-config-store";
+import { channelFetch, channelRequestUrl } from "./channel-request";
 
 type RequestOptions = { signal?: AbortSignal };
 
@@ -33,43 +35,36 @@ export type RunPluginArgs = {
     onDelta?: (text: string) => void;
 };
 
-function pluginHeaders(extra?: Record<string, string>, hasJsonBody = false): Record<string, string> {
-    const headers: Record<string, string> = {};
-    if (hasJsonBody) headers["Content-Type"] = "application/json";
-    return { ...headers, ...extra };
-}
-
 function pluginUrl(config: AiConfig, path: string) {
-    if (/^https?:/i.test(path)) return withLocalProxy(path);
-    return buildApiUrl(config.baseUrl, path.startsWith("/") ? path : `/${path}`);
+    return channelRequestUrl(config, path);
 }
 
 function createPluginHttp(config: AiConfig, options?: RequestOptions): PluginHttp {
-    const run = async (method: "get" | "post", path: string, body: unknown, opts?: PluginHttpOptions) => {
-        const isForm = typeof FormData !== "undefined" && body instanceof FormData;
-        const response = await axios.request({
-            method,
-            url: pluginUrl(config, path),
-            data: method === "post" ? body : undefined,
-            params: opts?.params,
-            headers: pluginHeaders({ Authorization: `Bearer ${config.apiKey}`, ...opts?.headers }, method === "post" && !isForm && body !== undefined),
-            responseType: opts?.responseType || "json",
-            signal: options?.signal,
-        });
-        return response.data;
-    };
+    const request = createPluginRequest(config, options);
     return {
         url: (path) => pluginUrl(config, path),
-        post: (path, body, opts) => run("post", path, body, opts),
-        get: (path, opts) => run("get", path, undefined, opts),
+        post: (url, data, opts) => request({ ...opts, method: "post", url, data, headers: { Authorization: `Bearer ${config.apiKey}`, ...opts?.headers } }),
+        get: (url, opts) => request({ ...opts, method: "get", url, headers: { Authorization: `Bearer ${config.apiKey}`, ...opts?.headers } }),
     };
 }
 
-/** Raw request with no automatic auth header — the script controls method, url, headers, body entirely. */
+/** Explicit script headers are supported, but cannot bypass the channel recipient or redirect boundary. */
 function createPluginRequest(config: AiConfig, options?: RequestOptions) {
     return async (requestConfig: AxiosRequestConfig & { url: string }) => {
-        const response = await axios.request({ ...requestConfig, url: pluginUrl(config, requestConfig.url), signal: options?.signal });
-        return response.data;
+        const url = new URL(pluginUrl(config, requestConfig.url));
+        for (const [key, value] of Object.entries(requestConfig.params || {})) {
+            if (value !== undefined && value !== null) url.searchParams.set(key, String(value));
+        }
+        const headers = new Headers(requestConfig.headers as Record<string, string> | undefined);
+        const data = requestConfig.data;
+        const isForm = typeof FormData !== "undefined" && data instanceof FormData;
+        const body = data === undefined ? undefined : isForm || data instanceof Blob || typeof data === "string" ? data : JSON.stringify(data);
+        if (body !== undefined && !isForm && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+        const response = await channelFetch(config, url.href, { method: requestConfig.method || "get", headers, body, signal: options?.signal });
+        if (requestConfig.responseType === "blob") return response.blob();
+        if (requestConfig.responseType === "arraybuffer") return response.arrayBuffer();
+        if (requestConfig.responseType === "text") return response.text();
+        return response.json();
     };
 }
 
@@ -136,7 +131,7 @@ export async function runModelPlugin<T = unknown>(args: RunPluginArgs): Promise<
         `"use strict"; return (async () => {\n${args.script}\n})();`,
     ) as (...fnArgs: unknown[]) => Promise<T>;
     try {
-        return await runner(
+        const result = await runner(
             args.prompt || "",
             args.images || [],
             args.videos || [],
@@ -155,10 +150,12 @@ export async function runModelPlugin<T = unknown>(args: RunPluginArgs): Promise<
             args.signal,
             args.onDelta,
         );
+        if (args.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+        return result;
     } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") throw error;
         if (axios.isCancel(error)) throw error;
-        const message = error instanceof Error ? error.message : String(error);
+        const message = redactText(error instanceof Error ? error.message : String(error), [config.apiKey]);
         throw new Error(i18n.t("modelPlugin.executionFailed", { message }));
     }
 }
@@ -680,7 +677,7 @@ async function generateVideo({
     },
   });
 
-  return await poll(
+  const uri = await poll(
     () => request({
       method: "get",
       url: \`\${baseUrl}/v1beta/\${op.name}\`,
@@ -693,12 +690,11 @@ async function generateVideo({
       if (!state.done) return null;
       const uri = state.response?.generateVideoResponse?.generatedSamples?.[0]?.video?.uri;
       if (!uri) throw new Error("Gemini did not return a video URI");
-      if (uri.includes("key=")) return { url: uri };
-      const separator = uri.includes("?") ? "&" : "?";
-      return { url: uri + separator + "key=" + apiKey };
+      return uri;
     },
     { intervalMs: 5000, timeoutMs: 300000 },
   );
+  return await request({ method: "get", url: uri, headers, responseType: "blob" });
 }
 
 return await generateVideo({

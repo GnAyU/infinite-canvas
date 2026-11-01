@@ -2,8 +2,8 @@ import i18n from "@/i18n";
 import type { CanvasAgentSnapshot } from "@/lib/canvas/canvas-agent-ops";
 import type { AgentReasoningEffort } from "@/stores/use-agent-store";
 
+export const COMPANION_UNSUPPORTED = "当前配置不支持本地 Agent 或本地代理；旧连接信息仅保留在本地，不会连接。";
 type AgentConfigResponse = { ok?: boolean; protocolVersion?: number; url?: string; token?: string; hasToken?: boolean };
-const AGENT_MESSAGE_ASSET_PATTERN = /^agent-asset:([a-f0-9]{64})\/([a-f0-9]{64}\.(?:gif|jpe?g|png|webp))$/;
 
 export class AgentApiError<T = unknown> extends Error {
     constructor(readonly status: number, readonly response: T & { code?: string; error?: string; msg?: string }) {
@@ -41,23 +41,12 @@ export type AgentSkillsResponse = { ok?: boolean; data?: AgentSkillSummary[]; er
 export type AgentSkillResponse = { ok?: boolean; data?: AgentSkillDetail };
 export type AgentSkillDraftResponse = { ok?: boolean; data?: AgentSkillDraft };
 
-export async function postState(endpoint: string, token: string, clientId: string, snapshot: CanvasAgentSnapshot | null) {
-    try {
-        const response = await fetch(`${endpoint}/canvas/state?token=${encodeURIComponent(token)}&clientId=${encodeURIComponent(clientId)}`, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify(snapshot ? { ...snapshot, hasCanvas: true } : { hasCanvas: false }),
-        });
-        return response.ok;
-    } catch {
-        return false;
-    }
+export async function postState(endpoint: string, token: string, clientId: string, snapshot: CanvasAgentSnapshot | null): Promise<boolean> {
+    throw new Error(COMPANION_UNSUPPORTED);
 }
 
 export async function activateAgentClient(endpoint: string, token: string, clientId: string) {
-    try {
-        await fetch(`${endpoint}/canvas/activate?token=${encodeURIComponent(token)}&clientId=${encodeURIComponent(clientId)}`, { method: "POST" });
-    } catch {}
+    throw new Error(COMPANION_UNSUPPORTED);
 }
 
 export async function postToolResult(endpoint: string, token: string, clientId: string, body: { requestId: string; result?: unknown; error?: string }) {
@@ -81,10 +70,7 @@ export async function revealAgentLocalFile(endpoint: string, token: string, path
 }
 
 export function resolveAgentMessageAssetUrl(endpoint: string, token: string, value: string) {
-    const match = AGENT_MESSAGE_ASSET_PATTERN.exec(value);
-    if (!match) return value.startsWith("agent-asset:") ? "" : value;
-    const baseUrl = endpoint.trim().replace(/\/$/, "");
-    return baseUrl && token ? `${baseUrl}/agent/message-assets/${match[1]}/${match[2]}?token=${encodeURIComponent(token)}` : "";
+    return value.startsWith("agent-asset:") ? "" : value;
 }
 
 export function fetchCodexSkills(endpoint: string, token: string, forceReload = false) {
@@ -115,23 +101,12 @@ export function setCodexSkillEnabled(endpoint: string, token: string, skill: Pic
     return fetchAgentJson<{ ok?: boolean }>(endpoint, token, `/agent/codex/skills/${encodeURIComponent(skill.name)}/enabled`, jsonPost({ ...skill, enabled }));
 }
 
-export async function fetchAgentJson<T>(endpoint: string, token: string, path: string, init?: RequestInit) {
-    const url = `${endpoint}${path}${path.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}`;
-    const res = await fetch(url, init);
-    const data = (await res.json().catch(() => ({}))) as T & { error?: string; msg?: string };
-    if (!res.ok) throw new AgentApiError(res.status, data);
-    return data;
+export async function fetchAgentJson<T>(endpoint: string, token: string, path: string, init?: RequestInit): Promise<T> {
+    throw new Error(COMPANION_UNSUPPORTED);
 }
 
-export async function discoverAgentConfig(endpoint: string) {
-    try {
-        const res = await fetch(`${endpoint}/config`);
-        if (!res.ok) return null;
-        const data = (await res.json()) as AgentConfigResponse;
-        return data.ok ? data : null;
-    } catch {
-        return null;
-    }
+export async function discoverAgentConfig(endpoint: string): Promise<AgentConfigResponse | null> {
+    throw new Error(COMPANION_UNSUPPORTED);
 }
 
 function jsonPost(body: unknown): RequestInit {

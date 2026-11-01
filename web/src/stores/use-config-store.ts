@@ -79,6 +79,13 @@ const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
 export const LOCAL_PROXY_PACKAGE = "@basketikun/canvas-proxy";
 export const DEFAULT_LOCAL_PROXY_URL = "http://127.0.0.1:23210";
 
+/** The owner permits explicit HTTP channels, but never silently treats them as encrypted. */
+export function channelPlaintextWarning(baseUrl: string) {
+    try {
+        return new URL(baseUrl).protocol === "http:" ? "此渠道使用 HTTP 明文传输：API Key、提示词和生成内容可能被窃听或篡改。建议改用 HTTPS；仅向该渠道的精确来源发送密钥，不允许重定向。" : "";
+    } catch { return ""; }
+}
+
 export const defaultConfig: AiConfig = {
     channelMode: "local",
     baseUrl: OPENAI_BASE_URL,
@@ -497,11 +504,7 @@ export function normalizeLocalProxyUrl(value: string) {
     return /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
 }
 
-/** Prefix an outgoing request with the local forwarding proxy so the browser is not blocked by CORS. */
+/** Compatibility entrypoint: retained settings never enable a forwarding proxy. */
 export function withLocalProxy(url: string) {
-    const { proxyEnabled, proxyUrl } = useConfigStore.getState().config;
-    if (!proxyEnabled || !/^https?:\/\//i.test(url)) return url;
-    const base = normalizeLocalProxyUrl(proxyUrl);
-    if (!base || url.startsWith(`${base}/`)) return url;
-    return `${base}/${url}`;
+    return url;
 }

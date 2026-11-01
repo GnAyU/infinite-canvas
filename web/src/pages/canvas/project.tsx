@@ -6,6 +6,7 @@ import { saveAs } from "file-saver";
 import { useTranslation } from "react-i18next";
 
 import { requestEdit, requestGeneration, requestImageQuestion } from "@/services/api/image";
+import { logError } from "@/lib/secret-redaction";
 import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audio";
 import { createVideoGenerationTask, isVideoTaskFailed, storeGeneratedVideo, waitForVideoGenerationTask } from "@/services/api/video";
 import { defaultConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
@@ -1204,7 +1205,7 @@ function InfiniteCanvasPage() {
             await exportCanvasProjects([project], project.title || t("canvas.title"));
             message.success(t("canvas.projectPage.exported"));
         } catch (error) {
-            console.error(error);
+            logError(error);
             message.error(t("canvas.sidePanel.exportFailed"));
         } finally {
             hide();

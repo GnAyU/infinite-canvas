@@ -6,6 +6,7 @@ import { motion } from "motion/react";
 import { useTranslation } from "react-i18next";
 
 import { canvasThemes, type CanvasTheme } from "@/lib/canvas-theme";
+import { logError } from "@/lib/secret-redaction";
 import { exportCanvasNodes } from "@/lib/canvas/canvas-export";
 import { getNodeDefinition } from "@/lib/canvas/node-registry";
 import { cn } from "@/lib/utils";
@@ -216,7 +217,7 @@ function CanvasNodesTab({ nodes, selectedNodeIds, onFocusNode, onPreviewNode, on
             message.success(t("canvas.sidePanel.exported", { count: targets.length }));
             exitSelect();
         } catch (error) {
-            console.error(error);
+            logError(error);
             message.error(t("canvas.sidePanel.exportFailed"));
         } finally {
             hide();
@@ -432,7 +433,7 @@ const CanvasAssetsTab = memo(function CanvasAssetsTab({ onInsert, theme }: { onI
             if (added) message.success(t("canvas.sidePanel.addedAssets", { count: added }));
             else message.warning(t("canvas.sidePanel.mediaOnly"));
         } catch (error) {
-            console.error(error);
+            logError(error);
             message.error(t("canvas.sidePanel.addFailed"));
         } finally {
             hide();
