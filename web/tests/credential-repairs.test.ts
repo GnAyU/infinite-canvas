@@ -141,10 +141,12 @@ const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwM
 const mediaReply = (body: string, type: string) => (url: string) => url.includes("predictLongRunning") ? Response.json({ name: task.id }) : url.includes("/operations/") ? Response.json({ done: true, response: { generateVideoResponse: { generatedSamples: [{ video: { uri: `${baseUrl}/media.mp4` } }] } } }) : new Response(body, { headers: { "Content-Type": type } });
 
 const commentError = `<!-- gateway authentication failure -->\n<html><body>Header authentication unsupported; echo ${key}</body></html>`;
+const fragmentError = `<div class="gateway-error"><h1>401 Unauthorized</h1><p>Header authentication unsupported; echo ${key}</p></div>`;
+const envelopes = [{ envelope: "comment-prefixed", body: commentError }, { envelope: "fragment", body: fragmentError }];
 
-test.each(["native-video", "template-video", "native-audio"])("F1 comment-prefixed HTML rejects before %s completion", async (operation: string) => {
+test.each(envelopes.flatMap((entry) => ["native-video", "template-video", "native-audio"].map((operation) => ({ ...entry, operation }))))("F1 $envelope HTML rejects before $operation completion", async ({ body, operation }: { body: string; operation: string }) => {
     useConfigStore.setState({ config: defaultConfig, webdav: defaultWebdavSyncConfig });
-    respond = mediaReply(commentError, operation === "native-audio" ? "audio/mpeg" : "video/mp4");
+    respond = mediaReply(body, operation === "native-audio" ? "audio/mpeg" : "video/mp4");
     calls.length = 0;
     const run = operation === "native-video" ? pollVideoGenerationTask(configFor("gemini"), task)
         : operation === "template-video" ? createVideoGenerationTask(configFor("gemini", getPluginTemplates().video[1].script), "synthetic")
@@ -154,12 +156,12 @@ test.each(["native-video", "template-video", "native-audio"])("F1 comment-prefix
     expect(calls.every((call) => !call.url.includes(key))).toBe(true);
 });
 
-test.each((["image", "audio", "video"] as const).flatMap((kind) => ["blob", "record.blob", "inline", "url"].map((form) => ({ kind, form }))))("F1 comment-prefixed HTML rejects $kind script $form before results", async ({ kind, form }: { kind: "image" | "audio" | "video"; form: string }) => {
+test.each(envelopes.flatMap((entry) => (["image", "audio", "video"] as const).flatMap((kind) => ["blob", "record.blob", "inline", "url"].map((form) => ({ ...entry, kind, form })))))("F1 $envelope HTML rejects $kind script $form before results", async ({ body, kind, form }: { body: string; kind: "image" | "audio" | "video"; form: string }) => {
     const type = kind === "image" ? "image/png" : kind === "audio" ? "audio/mpeg" : "video/mp4";
-    const blob = `new Blob([${JSON.stringify(commentError)}],{type:${JSON.stringify(type)}})`;
+    const blob = `new Blob([${JSON.stringify(body)}],{type:${JSON.stringify(type)}})`;
     const source = form === "blob" ? blob : form === "record.blob" ? `{blob:${blob}}`
-        : form === "inline" ? JSON.stringify(`data:${type};base64,${btoa(commentError)}`) : `{url:baseUrl+'/media.mp4'}`;
-    respond = () => new Response(commentError, { headers: { "Content-Type": type } });
+        : form === "inline" ? JSON.stringify(`data:${type};base64,${btoa(body)}`) : `{url:baseUrl+'/media.mp4'}`;
+    respond = () => new Response(body, { headers: { "Content-Type": type } });
     calls.length = 0;
     const config = configFor("openai", `return ${source};`);
     const run = kind === "audio" ? requestAudioGeneration(config, "synthetic") : kind === "video" ? createVideoGenerationTask(config, "synthetic") : requestGeneration(config, "synthetic");
@@ -167,9 +169,9 @@ test.each((["image", "audio", "video"] as const).flatMap((kind) => ["blob", "rec
     expect(calls).toHaveLength(form === "url" ? 1 : 0);
 });
 
-test("F1 leading declarations reject across stream boundaries without scanning binary media", async () => {
+test("F1 leading declarations and HTML fragments reject across stream boundaries without scanning binary media", async () => {
     const { normalizeMediaBlob, inlineMediaBlob } = await import("../src/services/api/media-result");
-    for (const body of [commentError, `\ufeff \n<!-- first -->\n<!-- second -->\n${commentError}`, "<!-- unfinished comment", "<!DOCTYPE html><html>authentication failed</html>", "<?xml version='1.0'?><error>authentication failed</error>", "<html>authentication failed</html>"]) {
+    for (const body of [fragmentError, `\ufeff \n${fragmentError}`, "<P>authentication failed</P>", "<section data-error='auth'>authentication failed</section>", "</DIV>authentication failed", "<gateway-error>authentication failed</gateway-error>", "<div", commentError, `\ufeff \n<!-- first -->\n<!-- second -->\n${commentError}`, "<!-- unfinished comment", "<!DOCTYPE html><html>authentication failed</html>", "<?xml version='1.0'?><error>authentication failed</error>", "<html>authentication failed</html>"]) {
         for (const kind of ["image", "audio", "video"] as const) {
             const type = `${kind}/${kind === "image" ? "png" : kind === "audio" ? "mpeg" : "mp4"}`;
             const blob = new Blob([body], { type });
@@ -224,12 +226,12 @@ test("F1 image downloads reject known error envelopes even with image MIME", asy
     }
 });
 
-test("F1 native OpenAI and Gemini reject comment-prefixed HTML in inline, fileData and remote images", async () => {
+test.each(envelopes)("F1 native OpenAI and Gemini reject $envelope HTML in inline, fileData and remote images", async ({ body }: { body: string }) => {
     for (const format of ["openai", "gemini"] as const) {
         for (const route of ["inline", "fileData", "remote"] as const) {
-            const source = route === "remote" ? `${baseUrl}/error.png` : `data:image/png;base64,${btoa(commentError)}`;
-            respond = (url) => url.endsWith("/error.png") ? new Response(commentError, { headers: { "Content-Type": "image/png" } })
-                : Response.json(format === "openai" ? { data: [{ url: source }] } : { candidates: [{ content: { parts: [route === "inline" ? { inlineData: { data: btoa(commentError), mimeType: "image/png" } } : { fileData: { fileUri: source, mimeType: "image/png" } }] } }] });
+            const source = route === "remote" ? `${baseUrl}/error.png` : `data:image/png;base64,${btoa(body)}`;
+            respond = (url) => url.endsWith("/error.png") ? new Response(body, { headers: { "Content-Type": "image/png" } })
+                : Response.json(format === "openai" ? { data: [{ url: source }] } : { candidates: [{ content: { parts: [route === "inline" ? { inlineData: { data: btoa(body), mimeType: "image/png" } } : { fileData: { fileUri: source, mimeType: "image/png" } }] } }] });
             await expect(requestGeneration(configFor(format), "synthetic")).rejects.toThrow("渠道未返回有效媒体");
         }
     }
