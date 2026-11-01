@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { App, Button, Input, Modal, Popconfirm, Switch, Tabs } from "antd";
 import { AlertTriangle, Download, Puzzle, RefreshCw, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { canvasThemes } from "@/lib/canvas-theme";
-import { installPluginFromUrl, setPluginEnabled, uninstallPlugin, updatePlugin } from "@/lib/canvas/plugin-loader";
+import { ensurePluginsLoaded, installPluginFromUrl, setPluginEnabled, uninstallPlugin, updatePlugin } from "@/lib/canvas/plugin-loader";
+import { PLUGIN_REGISTRY_URL } from "@/constant/env";
 import { fetchOfficialPlugins, hasUpgrade, type OfficialPluginEntry } from "@/lib/canvas/plugin-registry";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { usePluginStore, type InstalledPlugin } from "@/stores/canvas/use-plugin-store";
@@ -37,11 +38,6 @@ export function CanvasPluginManagerModal({ open, onClose }: { open: boolean; onC
             setLoadingOfficial(false);
         }
     }, []);
-
-    // Fetch the official registry when opening the panel, but only if it has not been loaded yet.
-    useEffect(() => {
-        if (open && official.length === 0 && !loadingOfficial && !officialError) void loadOfficial();
-    }, [open, official.length, loadingOfficial, officialError, loadOfficial]);
 
     const handleInstallUrl = async () => {
         const target = url.trim();
@@ -127,7 +123,7 @@ export function CanvasPluginManagerModal({ open, onClose }: { open: boolean; onC
     );
 
     // Shared plugin row: icon, title with name and version, description, and actions.
-    const row = (key: string, icon: ReactNode, name: string, version: string, subtitle: string | undefined, right: ReactNode) => (
+    const row = (key: string, icon: ReactNode, name: string, version: string, subtitle: ReactNode, right: ReactNode) => (
         <div key={key} className="flex items-center gap-3 rounded-xl border px-3 py-2.5" style={{ borderColor: theme.node.stroke, background: theme.node.fill }}>
             <span className="grid size-9 shrink-0 place-items-center rounded-lg text-base" style={{ background: theme.toolbar.activeBg, color: theme.node.muted }}>
                 {icon}
@@ -178,7 +174,7 @@ export function CanvasPluginManagerModal({ open, onClose }: { open: boolean; onC
                             entry.name,
                             // Show local and remote versions in the title so the update target is explicit.
                             upgradable && record ? `${record.version} → ${entry.version}` : entry.version,
-                            entry.description,
+                            <>{entry.description}<div className="break-all">{entry.url}</div></>,
                             record ? (
                                 installedControls(record, upgradable)
                             ) : (
@@ -216,6 +212,9 @@ export function CanvasPluginManagerModal({ open, onClose }: { open: boolean; onC
     return (
         <Modal title={t("canvas.plugins.title")} open={open} onCancel={onClose} footer={null} centered width={640}>
             <div className="space-y-3">
+                <div className="break-all text-xs" style={{ color: theme.node.muted }}>插件目录仅在点击刷新后请求：{PLUGIN_REGISTRY_URL}。安装或更新请求所选插件地址。</div>
+                <div className="break-all text-xs" style={{ color: theme.node.muted }}>会话加载目标：/plugins/index.json 及其列出的本地插件；开发插件：{import.meta.env.VITE_DEV_PLUGINS || "无"}；已安装插件更新地址：{plugins.map((plugin) => plugin.url).join("、") || "无"}。</div>
+                <Button type="text" onClick={() => void ensurePluginsLoaded().catch(() => message.error("插件加载失败"))}>本次会话加载已安装插件及 /plugins/index.json（会执行插件代码；开发插件也仅在此加载）</Button>
                 <div className="flex items-start gap-2 rounded-lg border px-3 py-2 text-xs leading-5" style={{ borderColor: "#f59e0b55", background: "#f59e0b14", color: theme.node.text }}>
                     <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" />
                     <span>{t("canvas.plugins.warning")}</span>

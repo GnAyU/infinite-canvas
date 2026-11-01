@@ -3,6 +3,7 @@ import { App } from "antd";
 import { useTranslation } from "react-i18next";
 import { APP_VERSION } from "@/constant/env";
 import { parseChangelog, type ReleaseInfo } from "@/lib/release";
+import { isBackgroundAllowed, useBackgroundPermission } from "@/stores/use-background-store";
 
 const latestVersionUrl = "https://raw.githubusercontent.com/basketikun/infinite-canvas/main/VERSION";
 const latestChangelogUrl = "https://raw.githubusercontent.com/basketikun/infinite-canvas/main/CHANGELOG.md";
@@ -26,6 +27,7 @@ function isNewerVersion(latestVersion: string, currentVersion: string) {
 export function useVersionCheck() {
     const { t } = useTranslation();
     const currentVersion = APP_VERSION;
+    const allowed = useBackgroundPermission("version");
     const { message } = App.useApp();
     const localReleases = useMemo(readLocalReleases, []);
     const [latestVersion, setLatestVersion] = useState(currentVersion);
@@ -36,7 +38,8 @@ export function useVersionCheck() {
 
     const checkLatestVersion = useCallback(async () => {
         try {
-            const response = await fetch(latestVersionUrl);
+            if (!isBackgroundAllowed("version")) return false;
+            const response = await fetch(latestVersionUrl, { referrerPolicy: "no-referrer" });
             if (!response.ok) return false;
             const version = await response.text();
             setLatestVersion(version.trim() || currentVersion);
@@ -50,7 +53,7 @@ export function useVersionCheck() {
         async (showMessage = false) => {
             setChecking(true);
             try {
-                const [versionResponse, changelogResponse] = await Promise.all([fetch(latestVersionUrl), fetch(latestChangelogUrl)]);
+                const [versionResponse, changelogResponse] = await Promise.all([fetch(latestVersionUrl, { referrerPolicy: "no-referrer" }), fetch(latestChangelogUrl, { referrerPolicy: "no-referrer" })]);
                 if (!versionResponse.ok) throw new Error(t("version.readFailed"));
                 if (!changelogResponse.ok) throw new Error(t("version.changelogFailed"));
                 const [version, changelog] = await Promise.all([versionResponse.text(), changelogResponse.text()]);
@@ -71,13 +74,12 @@ export function useVersionCheck() {
     );
 
     useEffect(() => {
-        void checkLatestVersion();
-    }, [checkLatestVersion]);
+        if (isBackgroundAllowed("version")) void checkLatestVersion();
+    }, [allowed, checkLatestVersion]);
 
     const openReleaseModal = useCallback(() => {
         setOpen(true);
-        void checkLatestRelease();
-    }, [checkLatestRelease]);
+    }, []);
 
     return {
         open,

@@ -40,7 +40,18 @@ function localPluginsManifest(): Plugin {
 
 export default defineConfig({
     base: process.env.VITE_BASE || "/",
-    plugins: [react(), localPluginsManifest()],
+    plugins: [react(), localPluginsManifest(), {
+        name: "url-bootstrap-first",
+        transformIndexHtml: {
+            order: "post",
+            handler(html) {
+                // Vite/React prepend scripts in dev. Protect the served HTML, not only the source order.
+                const bootstrap = html.match(/<!-- url-bootstrap:start -->[\s\S]*?<!-- url-bootstrap:end -->/)?.[0];
+                if (!bootstrap) throw new Error("Missing synchronous URL bootstrap protection");
+                return html.replace(bootstrap, "").replace(/<head\b[^>]*>/, (head) => `${head}\n${bootstrap}`);
+            },
+        },
+    }],
     resolve: {
         alias: {
             "@": resolve(webDir, "src"),

@@ -1,7 +1,38 @@
 <!doctype html>
 <html lang="zh-CN" class="font-sans">
     <head>
+        <!-- url-bootstrap:start -->
         <meta charset="UTF-8" />
+        <meta name="referrer" content="no-referrer" />
+        <script>
+            // Query credentials already reached the host on navigation. This cannot sanitize server logs.
+            // Run synchronously before resources, deployment config, analytics, or the router can see them.
+            (function () {
+                var location = window.location;
+                var query = new URLSearchParams(location.search);
+                var fragment = new URLSearchParams(location.hash.slice(1));
+                var sensitive = ["baseurl", "apikey", "agenturl", "agenttoken"];
+                function value(params, name) {
+                    for (var entry of params) if (entry[0].toLowerCase() === name) return entry[1];
+                    return "";
+                }
+                var baseUrl = value(query, "baseurl") || value(fragment, "baseurl");
+                var apiKey = value(query, "apikey") || value(fragment, "apikey");
+                if (baseUrl || apiKey) window.__IC_BOOTSTRAP__ = { baseUrl: baseUrl, apiKey: apiKey };
+                // Agent bootstrap is unsupported: discard, never retain or connect.
+                function scrub(raw) {
+                    return raw.split("&").filter(function (part) {
+                        var name = new URLSearchParams(part).keys().next().value;
+                        return !name || sensitive.indexOf(name.toLowerCase()) < 0;
+                    }).join("&");
+                }
+                var search = scrub(location.search.slice(1));
+                var hash = scrub(location.hash.slice(1));
+                var next = location.pathname + (search ? "?" + search : "") + (hash ? "#" + hash : "");
+                if (next !== location.pathname + location.search + location.hash) window.history.replaceState(window.history.state, "", next);
+            })();
+        </script>
+        <!-- url-bootstrap:end -->
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <meta name="description" content="一个无限画布创作工具" />
         <link rel="icon" href="/logo.svg" />

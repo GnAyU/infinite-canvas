@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="referrer" content="no-referrer" />
+    <title>Infinite Canvas</title>
+</head>
+<body>
+<script>
+    // No allow-same-origin: providers cannot recover the parent document/location/storage.
+    // Provider auto-events can only see this static frame, never the user's functional URL.
+    const routes = new Set(["/", "/image", "/video", "/assets", "/prompts", "/canvas", "/canvas/:id", "/config", "/not-found"]);
+    let initialized = false;
+    let ga4 = "";
+    let baidu = "";
+    const fields = (route) => ({ page_path: route, page_location: "https://infinite-canvas.invalid" + route, page_title: "Infinite Canvas", page_referrer: "" });
+    function script(src) {
+        const el = document.createElement("script");
+        el.async = true;
+        el.referrerPolicy = "no-referrer";
+        el.src = src;
+        document.head.appendChild(el);
+    }
+    function pageview(route) {
+        if (!routes.has(route)) return;
+        if (ga4) {
+            window.gtag("set", fields(route));
+            window.gtag("event", "page_view", fields(route));
+        }
+        if (baidu) window._hmt.push(["_trackPageview", route]);
+    }
+    window.addEventListener("message", (event) => {
+        if (event.source !== window.parent || !event.data || !routes.has(event.data.route)) return;
+        const data = event.data;
+        if (data.type === "ic-analytics-init" && !initialized) {
+            initialized = true;
+            ga4 = /^G-[A-Z0-9]+$/.test(data.ga4) ? data.ga4 : "";
+            baidu = /^[a-f0-9]{32}$/i.test(data.baidu) ? data.baidu : "";
+            if (ga4) {
+                window.dataLayer = [];
+                window.gtag = (...args) => window.dataLayer.push(args);
+                window.gtag("consent", "default", { analytics_storage: "granted", ad_storage: "denied", ad_user_data: "denied", ad_personalization: "denied" });
+                window.gtag("js", new Date());
+                window.gtag("set", fields(data.route));
+                window.gtag("config", ga4, { ...fields(data.route), send_page_view: false, allow_google_signals: false, allow_ad_personalization_signals: false });
+                script("https://www.googletagmanager.com/gtag/js?id=" + encodeURIComponent(ga4));
+            }
+            if (baidu) {
+                window._hmt = [["_setAutoPageview", false], ["_setAutoEventTracking", false]];
+                script("https://hm.baidu.com/hm.js?" + encodeURIComponent(baidu));
+            }
+            pageview(data.route);
+        } else if (data.type === "ic-analytics-pageview" && initialized) pageview(data.route);
+    });
+</script>
+</body>
+</html>

@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import { refreshDueSources } from "@/services/api/prompts";
 import { usePromptSourceStore } from "@/stores/use-prompt-source-store";
+import { isBackgroundAllowed, useBackgroundPermission } from "@/stores/use-background-store";
 
 const CHECK_INTERVAL_MS = 60_000;
 
@@ -10,12 +11,13 @@ const CHECK_INTERVAL_MS = 60_000;
 export function usePromptSourceScheduler() {
     const queryClient = useQueryClient();
     const intervalMinutes = usePromptSourceStore((state) => state.schedule.intervalMinutes);
+    const allowed = useBackgroundPermission("promptFeed");
 
     useEffect(() => {
-        if (!intervalMinutes) return;
+        if (!allowed || !intervalMinutes) return;
         let running = false;
         const tick = async () => {
-            if (running) return;
+            if (running || !isBackgroundAllowed("promptFeed")) return;
             const { updateSchedule } = usePromptSourceStore.getState();
             running = true;
             try {
@@ -36,5 +38,5 @@ export function usePromptSourceScheduler() {
         void tick();
         const timer = window.setInterval(() => void tick(), CHECK_INTERVAL_MS);
         return () => window.clearInterval(timer);
-    }, [intervalMinutes, queryClient]);
+    }, [allowed, intervalMinutes, queryClient]);
 }

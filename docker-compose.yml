@@ -5,7 +5,10 @@ services:
     ports:
       - "3000:3000"
     restart: unless-stopped
-    # 统计分析（可选，默认关闭）。每家一个独立变量，填了谁就启用谁，可同时启用多家：
+    # 统计 ID 仅为配置，不代表用户同意；统计、版本与提示词后台联网均需分别会话内选择开启。
     # environment:
     #   ANALYTICS_GA4_ID: G-XXXXXXXXXX                    # Google Analytics 4 衡量 ID
     #   ANALYTICS_BAIDU_ID: xxxxxxxxxxxxxxxxxxxxxxxxxxxx   # 百度统计站点 ID
+    #   DISABLE_ANALYTICS: "true"                       # 部署强制关闭（不能强制用户同意）
+    #   DISABLE_VERSION_CHECK: "true"
+    #   DISABLE_PROMPT_FEED: "true"

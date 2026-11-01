@@ -42,6 +42,7 @@ export function VersionReleaseModal({ className, style }: VersionReleaseModalPro
                 </span>
             </button>
             <Modal title={t("version.title")} open={open} width={680} centered footer={null} onCancel={() => setOpen(false)}>
+                <div className="mb-3 break-all text-xs opacity-60">此窗口默认仅显示本地更新记录；手动「检查更新」请求 raw.githubusercontent.com/basketikun/infinite-canvas/main/ 下的 VERSION 与 CHANGELOG.md。单独同意自动检查后也会请求 VERSION。</div>
                 <div className="mb-5 grid grid-cols-2 gap-3">
                     <div className="rounded-lg border border-stone-200 p-3 dark:border-stone-800">
                         <div className="text-xs text-stone-500 dark:text-stone-400">{t("version.currentVersion")}</div>

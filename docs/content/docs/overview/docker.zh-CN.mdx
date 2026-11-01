@@ -53,16 +53,19 @@ docker compose -f docker-compose.local.yml up -d --build
 
 ## 统计分析（可选）
 
-项目**默认不接入任何统计**：不设置下列环境变量时，页面不会加载任何统计脚本，也不会发送任何外部请求。你在自己的部署上想查看流量时，设置对应环境变量即可，无需修改代码或重新构建镜像——镜像启动时会据此生成运行期配置。
+统计、自动版本检查、提示词源自动刷新及图片均默认关闭，用户须在「偏好设置」分别明确同意，仅本次页面会话有效。刷新页面或导入配置不会开启这些选项。配置统计 ID 不等于用户同意；镜像启动时只生成可用服务及强制关闭项的运行期配置。
 
-统计按「每家一个独立变量」配置：**填了谁就启用谁，可同时启用多家**（例如 GA4 + 百度一起开）。仅支持 GA4 与百度，两者都只接受 ID，脚本地址由代码固定拼接，不接受任意脚本地址或内联 JS。
+统计按每家一个独立变量配置，仅支持 GA4 与百度；两者只接受 ID，脚本地址固定拼接，不接受任意脚本地址或内联 JS。填写 ID 不会自动加载脚本。
 
 | 变量 | 说明 |
 | --- | --- |
 | `ANALYTICS_GA4_ID` | Google Analytics 4 衡量 ID（`G-XXXX`） |
 | `ANALYTICS_BAIDU_ID` | 百度统计站点 ID（`hm.js?` 后面那串 hash） |
+| `DISABLE_ANALYTICS` | `true` 强制关闭统计 |
+| `DISABLE_VERSION_CHECK` | `true` 强制关闭自动版本检查 |
+| `DISABLE_PROMPT_FEED` | `true` 强制关闭提示词源自动刷新及图片 |
 
-在 `docker-compose.yml` 的 `environment` 中配置（文件内已附注释示例），下例同时启用 GA4 与百度：
+在 `docker-compose.yml` 的 `environment` 中配置（文件内已附注释示例），下例配置 GA4 与百度，仍需用户会话内同意：
 
 ```yaml
 services:
@@ -72,7 +75,7 @@ services:
       - "3000:3000"
     environment:
       ANALYTICS_GA4_ID: G-XXXXXXXXXX
-      ANALYTICS_BAIDU_ID: e8263761cc5c32f5f7a855b8203b965a
+      ANALYTICS_BAIDU_ID: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
 或使用 `docker run`：
@@ -80,11 +83,15 @@ services:
 ```bash
 docker run -d -p 3000:3000 \
   -e ANALYTICS_GA4_ID=G-XXXXXXXXXX \
-  -e ANALYTICS_BAIDU_ID=e8263761cc5c32f5f7a855b8203b965a \
+  -e ANALYTICS_BAIDU_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx \
   ghcr.io/basketikun/infinite-canvas:latest
 ```
 
-单页应用的路由切换会自动向所有已启用的统计上报 pageview。
+构建时也支持 `VITE_DISABLE_ANALYTICS`、`VITE_DISABLE_VERSION_CHECK`、`VITE_DISABLE_PROMPT_FEED`；任一层设置 `true` 都优先拒绝，部署不能强制用户同意。手动检查更新和刷新提示词显示目标地址，仅点击时联网。插件目录刷新及已安装、本地和开发插件加载需在管理器内主动操作；该门禁不代表 WEB-C 的代码信任机制已完成。
+
+同意统计后仅传递静态路由或模板，不发送原始查询、片段、完整页面地址、渠道名、用户标题或生成文本。第三方统计脚本运行在无父页面访问权的隔离不透明来源 iframe 内；关闭统计会移除整个上下文。模拟验收不能证明真实服务商兼容性，Docker 部署仍待单独验证。
+
+不要生成或分享带密钥的查询链接，请在渠道设置中输入凭据。兼容旧入口时，页面在资源、路由及统计初始化之前同步捕获支持的值到内存并清理 URL；新渠道不自动选中，密钥不持久化，按原样精确端点绑定（根路径与 `/v1` 不同）。Agent bootstrap 直接丢弃。**查询凭据在首次导航时已经到达托管服务器；客户端清理不能追溯清除服务器日志。**
 
 <Callout type="warn">
 请只在你自己的站点上配置统计 ID，不要把 ID 提交进仓库；fork 或自托管本项目的用户默认不会产生任何统计。

@@ -41,12 +41,15 @@ The main application container only runs Next.js. Canvases, My Assets, generatio
 
 ## Optional analytics
 
-No analytics are enabled by default. A deployment can enable GA4, Baidu Analytics, or both at runtime:
+Analytics, automatic version checks, and prompt-feed refresh/images are separately OFF by default. Provider IDs configure available providers, not user consent. Users must explicitly opt in separately in Preferences for the current page session; reload and configuration imports never grant consent.
 
 | Variable | Description |
 | --- | --- |
 | `ANALYTICS_GA4_ID` | Google Analytics 4 measurement ID (`G-XXXX`) |
 | `ANALYTICS_BAIDU_ID` | Baidu site ID, the hash after `hm.js?` |
+| `DISABLE_ANALYTICS` | `true` prevents analytics opt-in |
+| `DISABLE_VERSION_CHECK` | `true` prevents automatic version checks |
+| `DISABLE_PROMPT_FEED` | `true` prevents automatic feed refresh and feed images |
 
 ```yaml
 services:
@@ -56,7 +59,11 @@ services:
       - "3000:3000"
     environment:
       ANALYTICS_GA4_ID: G-XXXXXXXXXX
-      ANALYTICS_BAIDU_ID: e8263761cc5c32f5f7a855b8203b965a
+      ANALYTICS_BAIDU_ID: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-SPA route changes automatically report page views to enabled providers. Only configure analytics IDs on sites you control, and do not commit them to the repository.
+Only after session consent, analytics receives allowlisted static route templates, not raw search, fragments, full page URLs, channel names or user/generated titles. Provider code runs in a disposable opaque-origin frame without access to the parent page; opting out removes that context. Live provider interoperability is not verified by the mocked acceptance checks.
+
+Build-time `VITE_DISABLE_ANALYTICS`, `VITE_DISABLE_VERSION_CHECK` and `VITE_DISABLE_PROMPT_FEED` also accept `true`. A denial at either layer wins; deployment settings cannot force consent on. Manual version/feed refresh buttons disclose their destinations and remain explicit actions, not scheduled work. Plugin catalog refresh and installed/local/development plugin loading require intentional manager actions; this gate is not the WEB-C code-trust mechanism.
+
+Do not create or share key-bearing query links. Prefer entering credentials in the channel settings. Legacy URL bootstrap captures supported values in memory and synchronously removes them before resources, router and analytics initialization. The imported channel is unselected and bound to the endpoint verbatim (root and `/v1` differ); its key is not persisted. Agent bootstrap is discarded. **Query credentials already reached the hosting server in the initial navigation; browser scrubbing cannot retroactively sanitize server logs.** Container deployment and live provider compatibility still require separate verification.

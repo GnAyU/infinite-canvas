@@ -1,84 +1,55 @@
-// Analytics loader: disabled by default, with support for enabling multiple providers.
-// Only GA4 and Baidu are supported. Both accept IDs only, and their script URLs are assembled here.
-// Arbitrary script URLs and inline JavaScript are intentionally rejected to prevent configuration from executing code in visitors' browsers.
-// When no IDs are configured, no scripts are injected and no external requests are sent.
-// Forks and self-hosted deployments therefore have no analytics by default; the official site provides its IDs through environment variables.
-
+// Provider code runs only after session consent, in a disposable opaque-origin frame.
+// It cannot read application URLs/titles/storage; removing it cancels future provider scheduling.
 import { ANALYTICS_BAIDU_ID, ANALYTICS_GA4_ID } from "@/constant/runtime-config";
+import { isBackgroundAllowed, useBackgroundStore } from "@/stores/use-background-store";
 
-type GtagFn = (...args: unknown[]) => void;
-
-declare global {
-    interface Window {
-        dataLayer?: unknown[];
-        gtag?: GtagFn;
-        _hmt?: unknown[][];
-    }
+const routes = new Set(["/", "/image", "/video", "/assets", "/prompts", "/canvas", "/canvas/:id", "/config", "/not-found"]);
+export function analyticsRoute(path: string) {
+    const pathname = path.split(/[?#]/, 1)[0];
+    return routes.has(pathname) ? pathname : /^\/canvas\/[^/]+$/.test(pathname) ? "/canvas/:id" : "/not-found";
 }
 
 let initialized = false;
-// Track enabled providers so route events are dispatched only where needed.
-const active = { ga4: false, baidu: false };
+let frame: HTMLIFrameElement | undefined;
+let currentRoute = "/";
+const ga4 = /^G-[A-Z0-9]+$/.test(ANALYTICS_GA4_ID) ? ANALYTICS_GA4_ID : "";
+const baidu = /^[a-f0-9]{32}$/i.test(ANALYTICS_BAIDU_ID) ? ANALYTICS_BAIDU_ID : "";
 
-function appendScript(src: string, attrs: Record<string, string> = {}) {
-    const el = document.createElement("script");
-    el.async = true;
-    el.src = src;
-    for (const [key, value] of Object.entries(attrs)) el.setAttribute(key, value);
-    document.head.appendChild(el);
-    return el;
-}
-
-function initGa4(id: string) {
-    window.dataLayer = window.dataLayer || [];
-    const gtag: GtagFn = (...args) => {
-        window.dataLayer!.push(args);
+function syncConsent() {
+    if (!isBackgroundAllowed("analytics")) {
+        frame?.remove();
+        frame = undefined;
+        return;
+    }
+    if (frame || (!ga4 && !baidu)) return;
+    const next = document.createElement("iframe");
+    next.hidden = true;
+    next.title = "匿名页面统计";
+    next.setAttribute("sandbox", "allow-scripts");
+    next.referrerPolicy = "no-referrer";
+    next.src = `${import.meta.env.BASE_URL || "/"}analytics-frame.html`;
+    next.onload = () => {
+        if (frame === next && isBackgroundAllowed("analytics")) next.contentWindow?.postMessage({ type: "ic-analytics-init", ga4, baidu, route: currentRoute }, "*");
     };
-    window.gtag = gtag;
-    appendScript(`https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(id)}`);
-    gtag("js", new Date());
-    // Disable GA4's automatic page view because SPA route reporting is handled by trackPageview.
-    gtag("config", id, { send_page_view: false });
-    active.ga4 = true;
-}
-
-function initBaidu(id: string) {
-    window._hmt = window._hmt || [];
-    appendScript(`https://hm.baidu.com/hm.js?${encodeURIComponent(id)}`);
-    active.baidu = true;
+    frame = next;
+    document.body.appendChild(next);
 }
 
 export function initAnalytics() {
     if (initialized || typeof window === "undefined") return;
     initialized = true;
-
-    // Initialize providers independently so one failure does not affect the others or the application.
-    if (ANALYTICS_GA4_ID) {
-        try {
-            initGa4(ANALYTICS_GA4_ID);
-        } catch {
-            /* Ignore analytics initialization errors. */
-        }
-    }
-    if (ANALYTICS_BAIDU_ID) {
-        try {
-            initBaidu(ANALYTICS_BAIDU_ID);
-        } catch {
-            /* Ignore analytics initialization errors. */
-        }
-    }
+    const unsubscribe = useBackgroundStore.subscribe(syncConsent);
+    syncConsent();
+    return () => {
+        unsubscribe();
+        frame?.remove();
+        frame = undefined;
+        initialized = false;
+    };
 }
 
-// Report SPA route changes to every enabled analytics provider.
+// No raw location, title, channel name or generated text crosses the frame boundary.
 export function trackPageview(path: string) {
-    try {
-        if (active.ga4 && window.gtag) {
-            window.gtag("event", "page_view", { page_path: path, page_location: window.location.href });
-        }
-        if (active.baidu && window._hmt) {
-            window._hmt.push(["_trackPageview", path]);
-        }
-    } catch {
-        /* Ignore analytics reporting errors. */
-    }
+    currentRoute = analyticsRoute(path);
+    if (isBackgroundAllowed("analytics")) frame?.contentWindow?.postMessage({ type: "ic-analytics-pageview", route: currentRoute }, "*");
 }

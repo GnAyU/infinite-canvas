@@ -18,6 +18,8 @@ import { audioFormatOptions, audioVoiceOptions, normalizeAudioSpeedValue } from 
 import { computeMediaSize, inferMediaRatio, inferMediaScale, mediaScaleOptions, parseVideoResolution } from "@/lib/media-size";
 import { createModelChannel, modelOptionsFromChannels, normalizeModelOptionValue, selectableModelsByCapability, useConfigStore, type AiConfig, type ApiCallFormat, type ConfigTabKey, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
 import { channelPlaintextWarning } from "@/stores/use-config-store";
+import { BACKGROUND_DISABLED } from "@/constant/runtime-config";
+import { useBackgroundStore, type BackgroundKind } from "@/stores/use-background-store";
 
 type ModelGroup = {
     capability: ModelCapability;
@@ -61,6 +63,8 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
     const [webdavSyncStatus, setWebdavSyncStatus] = useState("");
     const [webdavDomainProgress, setWebdavDomainProgress] = useState(createWebdavDomainProgress);
     const config = useConfigStore((state) => state.config);
+    const consent = useBackgroundStore((state) => state.consent);
+    const setConsent = useBackgroundStore((state) => state.setConsent);
     const webdav = useConfigStore((state) => state.webdav);
     const updateConfig = useConfigStore((state) => state.updateConfig);
     const updateWebdavConfig = useConfigStore((state) => state.updateWebdavConfig);
@@ -231,6 +235,20 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                         children: (
                             <Form layout="vertical" requiredMark={false}>
                                 <div className="mb-2 text-sm font-semibold">{t("config.preferences.defaultModels")}</div>
+                                <section className="mb-4 space-y-3">
+                                    <div className="text-sm font-semibold">可选后台联网（默认关闭，仅本次会话有效）</div>
+                                    {([
+                                        ["analytics", "匿名页面统计", "仅静态路由标识；目标：googletagmanager.com / google-analytics.com、hm.baidu.com（取决于部署配置）。"],
+                                        ["version", "自动检查版本", "目标：raw.githubusercontent.com/basketikun/infinite-canvas/main/VERSION；手动检查还会读取 CHANGELOG.md。"],
+                                        ["promptFeed", "自动刷新提示词源并加载图片", "目标：提示词源设置中的 JSON 地址，以及源内图片地址（可能为第三方站点）。"],
+                                    ] as [BackgroundKind, string, string][]).map(([kind, label, description]) => (
+                                        <div key={kind} className="flex items-center justify-between gap-3">
+                                            <div><div className="text-sm">{label}{BACKGROUND_DISABLED[kind] ? "（部署已禁用）" : ""}</div><div className="mt-1 text-xs opacity-60">{description}</div></div>
+                                            <Switch aria-label={label} checked={consent[kind] && !BACKGROUND_DISABLED[kind]} disabled={BACKGROUND_DISABLED[kind]} onChange={(checked) => setConsent(kind, checked)} />
+                                        </div>
+                                    ))}
+                                    <div className="text-xs opacity-60">导入配置、历史设置和部署 ID 均不会开启以上选项；关闭后停止后续调度。刷新页面后需重新同意。</div>
+                                </section>
                                 <div className="mb-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                                     {modelGroups.map((group) => (
                                         <Form.Item key={group.modelKey} label={t(group.labelKey)} className="mb-0">

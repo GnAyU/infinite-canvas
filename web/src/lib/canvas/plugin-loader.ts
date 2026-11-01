@@ -92,7 +92,7 @@ export function uninstallPlugin(id: string) {
 
 let loaded = false;
 
-// Load installed and enabled plugins at application startup.
+// Only the explicit manager load button calls this. Never call from startup or canvas mount.
 export async function ensurePluginsLoaded() {
     if (loaded) return;
     loaded = true;
@@ -149,8 +149,7 @@ async function loadLocalPlugins() {
     );
 }
 
-// During local development, refetch VITE_DEV_PLUGINS URLs without caching or persistence on every startup.
-// Together with watch builds, refreshing the page loads code changes without reinstalling the plugin.
+// Development URLs also require the intentional manager load action; reload alone never executes them.
 async function loadDevPlugins() {
     const raw = import.meta.env.VITE_DEV_PLUGINS;
     if (!raw) return;

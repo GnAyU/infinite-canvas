@@ -90,6 +90,7 @@ export function ConfigPromptSources() {
 
     return (
         <div>
+            <p className="mb-3 text-xs opacity-60">自动刷新与图片默认关闭，可在「偏好设置」分别同意后台联网。手动刷新仅请求所选源的 JSON 地址；「刷新全部」请求下方所有启用源。</p>
             <div className="mb-4 flex flex-wrap items-center justify-end gap-3">
                 <Button type="primary" icon={<Plus className="size-4" />} onClick={() => setEditingSource(addSource())}>
                     {t("config.promptSources.add")}
@@ -111,6 +112,7 @@ export function ConfigPromptSources() {
                                     <a className="max-w-full truncate hover:text-stone-800 hover:underline dark:hover:text-stone-200" href={source.homepage || source.url} target="_blank" rel="noreferrer">
                                         {source.homepage || source.url}
                                     </a>
+                                    <span className="break-all">手动刷新目标：{source.url}</span>
                                     <span className="tabular-nums">{t("config.promptSources.itemCount", { count: status?.count ?? 0 })}</span>
                                     {status?.lastError ? <Tag color="error" className="m-0 text-[10px]" title={status.lastError}>{t("config.promptSources.failed")}</Tag> : status?.lastSuccessAt ? <Tag color="success" className="m-0 text-[10px]">{t("config.promptSources.healthy")}</Tag> : <Tag className="m-0 text-[10px]">{t("config.promptSources.unsynced")}</Tag>}
                                     <span>{status?.lastSuccessAt ? t("config.promptSources.lastSuccess", { time: formatTime(status.lastSuccessAt, i18n.resolvedLanguage) }) : t("config.promptSources.neverFetched")}</span>

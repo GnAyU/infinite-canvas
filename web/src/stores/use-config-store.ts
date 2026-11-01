@@ -150,6 +150,7 @@ type ConfigStore = {
     shouldPromptContinue: boolean;
     updateConfig: <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => void;
     importChannelCredentials: (input: { baseUrl?: string | null; apiKey?: string | null }) => ChannelCredentialsImportResult;
+    importBootstrapCredentials: (endpoint: string, apiKey: string) => ChannelCredentialsImportResult;
     updateWebdavConfig: <K extends keyof WebdavSyncConfig>(key: K, value: WebdavSyncConfig[K]) => void;
     isAiConfigReady: (config: AiConfig, model: string) => boolean;
     openConfigDialog: (shouldPromptContinue?: boolean, tab?: ConfigTabKey) => void;
@@ -219,6 +220,25 @@ function isAiConfigReady(config: AiConfig, model: string) {
     return Boolean(match && match.channel.baseUrl.trim() && match.channel.apiKey.trim());
 }
 
+// WEB-B seam for WEB-C: URL credentials are session-only and bound verbatim, not /v1-normalized.
+// Keep them out of the reviewed non-bootstrap importer and out of persisted config.
+const bootstrapBindings = new Map<string, { endpoint: string; apiKey: string }>();
+
+function confineBootstrapChannels(channels: ModelChannel[]) {
+    return channels.map((channel) => {
+        const binding = bootstrapBindings.get(channel.id);
+        return binding && channel.baseUrl !== binding.endpoint ? { ...channel, apiKey: "" } : channel;
+    });
+}
+
+function withoutBootstrapKeys(config: AiConfig): AiConfig {
+    return {
+        ...config,
+        apiKey: [...bootstrapBindings.values()].some((binding) => binding.apiKey && binding.apiKey === config.apiKey) ? "" : config.apiKey,
+        channels: config.channels.map((channel) => bootstrapBindings.has(channel.id) ? { ...channel, apiKey: "" } : channel),
+    };
+}
+
 export const useConfigStore = create<ConfigStore>()(
     persist(
         (set, get) => ({
@@ -231,7 +251,7 @@ export const useConfigStore = create<ConfigStore>()(
                 set((state) => ({
                     config: {
                         ...state.config,
-                        [key]: value,
+                        [key]: key === "channels" ? confineBootstrapChannels(value as ModelChannel[]) : value,
                     },
                 })),
             importChannelCredentials: (input) => {
@@ -239,6 +259,20 @@ export const useConfigStore = create<ConfigStore>()(
                 const result = upsertChannelCredentials(currentConfig, input);
                 if (result.config !== currentConfig) set({ config: result.config });
                 return { status: result.status, channelName: result.channelName };
+            },
+            importBootstrapCredentials: (endpoint, apiKey) => {
+                if (!endpoint) return { status: "missing-base-url" };
+                try {
+                    const url = new URL(endpoint);
+                    if (endpoint !== endpoint.trim() || !/^https?:\/\//i.test(endpoint) || !isHttpBaseUrl(endpoint) || url.username || url.password || url.search || url.hash) return { status: "invalid-base-url" };
+                } catch { return { status: "invalid-base-url" }; }
+                // Even an exact match gets a separate, unselected channel. Never replace an active key.
+                const exact = get().config.channels.find((channel) => channel.baseUrl === endpoint);
+                const channel = createModelChannel({ name: exact?.name || importedChannelName(endpoint), baseUrl: endpoint, models: [] });
+                channel.apiKey = apiKey;
+                bootstrapBindings.set(channel.id, { endpoint, apiKey });
+                set((state) => ({ config: { ...state.config, channels: [...state.config.channels, channel] } }));
+                return { status: "created", channelName: channel.name };
             },
             updateWebdavConfig: (key, value) =>
                 set((state) => ({
@@ -254,7 +288,7 @@ export const useConfigStore = create<ConfigStore>()(
         }),
         {
             name: CONFIG_STORE_KEY,
-            partialize: (state) => ({ config: state.config, webdav: state.webdav }),
+            partialize: (state) => ({ config: withoutBootstrapKeys(state.config), webdav: state.webdav }),
             merge: (persisted, current) => {
                 const persistedState = (persisted || {}) as Partial<ConfigStore>;
                 const persistedConfig = (persistedState.config || {}) as Partial<AiConfig>;

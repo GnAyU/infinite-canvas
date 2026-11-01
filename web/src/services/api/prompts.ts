@@ -1,4 +1,5 @@
 import localforage from "localforage";
+import { isBackgroundAllowed } from "@/stores/use-background-store";
 
 import { runPromptSource, type RawPrompt } from "./prompt-source-runtime";
 import { usePromptSourceStore } from "@/stores/use-prompt-source-store";
@@ -79,8 +80,10 @@ async function readSourceCache(sourceId: string) {
     return promptCacheStore.getItem<SourceCache>(cacheKey(sourceId));
 }
 
-async function refreshSourceRecord(source: PromptSource): Promise<PromptSourceRefreshResult> {
+async function refreshSourceRecord(source: PromptSource, automatic: boolean): Promise<PromptSourceRefreshResult> {
     const previous = await readSourceCache(source.id);
+    // Opt-out also fences refreshes queued behind storage awaits.
+    if (automatic && !isBackgroundAllowed("promptFeed")) return { sourceId: source.id, sourceName: source.name, count: previous?.count || 0, lastSuccessAt: previous?.lastSuccessAt || "", lastError: "", success: false };
     try {
         const items = withSourceMeta(source, await runPromptSource(source));
         const lastSuccessAt = new Date().toISOString();
@@ -103,10 +106,10 @@ async function refreshSourceRecord(source: PromptSource): Promise<PromptSourceRe
     }
 }
 
-function getOrStartRefresh(source: PromptSource) {
+function getOrStartRefresh(source: PromptSource, automatic = false) {
     const current = loadingSources.get(source.id);
     if (current) return current;
-    const loading = refreshSourceRecord(source).finally(() => loadingSources.delete(source.id));
+    const loading = refreshSourceRecord(source, automatic).finally(() => loadingSources.delete(source.id));
     loadingSources.set(source.id, loading);
     return loading;
 }
@@ -115,10 +118,11 @@ async function getSourcePrompts(source: PromptSource): Promise<Prompt[]> {
     const cached = await readSourceCache(source.id);
     if (cached) {
         const stale = cached.signature !== sourceSignature(source) || Date.now() - cached.fetchedAt >= cacheTtlMs;
-        if (stale) void getOrStartRefresh(source).catch(() => undefined);
+        if (stale && isBackgroundAllowed("promptFeed")) void getOrStartRefresh(source, true).catch(() => undefined);
         return withSourceMeta(source, cached.items);
     }
-    const result = await getOrStartRefresh(source);
+    if (!isBackgroundAllowed("promptFeed")) return [];
+    const result = await getOrStartRefresh(source, true);
     if (!result.success) throw new Error(result.lastError);
     return (await readSourceCache(source.id))?.items || [];
 }
@@ -168,11 +172,12 @@ export async function refreshSource(sourceId: string): Promise<PromptSourceRefre
 }
 
 export async function refreshAllSources(): Promise<PromptSourceRefreshSummary> {
-    const results = await Promise.all(enabledSources().map(getOrStartRefresh));
+    const results = await Promise.all(enabledSources().map((source) => getOrStartRefresh(source)));
     return summarizeRefresh(results);
 }
 
 export async function refreshDueSources(maxAgeMs: number): Promise<PromptSourceRefreshSummary> {
+    if (!isBackgroundAllowed("promptFeed")) return summarizeRefresh([]);
     const sources = await Promise.all(
         enabledSources().map(async (source) => {
             const cached = await readSourceCache(source.id);
@@ -180,7 +185,7 @@ export async function refreshDueSources(maxAgeMs: number): Promise<PromptSourceR
             return !lastSuccess || Boolean(cached?.lastError) || Date.now() - lastSuccess >= maxAgeMs || cached?.signature !== sourceSignature(source) ? source : null;
         }),
     );
-    const results = await Promise.all(sources.filter((source): source is PromptSource => Boolean(source)).map(getOrStartRefresh));
+    const results = await Promise.all(sources.filter((source): source is PromptSource => Boolean(source)).filter(() => isBackgroundAllowed("promptFeed")).map((source) => getOrStartRefresh(source, true)));
     return summarizeRefresh(results);
 }
 
