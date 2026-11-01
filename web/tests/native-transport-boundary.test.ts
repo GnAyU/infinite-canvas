@@ -3,6 +3,11 @@ import axios from "axios";
 
 const storageDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
 const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+const readerDescriptor = Object.getOwnPropertyDescriptor(globalThis, "FileReader");
+Object.defineProperty(globalThis, "FileReader", { configurable: true, value: class {
+    result = ""; onload?: () => void;
+    async readAsDataURL(blob: Blob) { this.result = `data:${blob.type};base64,${btoa(Array.from(new Uint8Array(await blob.arrayBuffer()), (byte) => String.fromCharCode(byte)).join(""))}`; this.onload?.(); }
+} });
 const storage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
 Object.defineProperty(globalThis, "localStorage", { configurable: true, value: storage });
 Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage: storage, setTimeout, clearTimeout } });
@@ -46,7 +51,7 @@ axios.defaults.adapter = async (request) => {
 afterAll(() => {
     globalThis.fetch = originalFetch;
     axios.defaults.adapter = originalAdapter;
-    for (const [name, descriptor] of [["window", windowDescriptor], ["localStorage", storageDescriptor]] as const) {
+    for (const [name, descriptor] of [["window", windowDescriptor], ["localStorage", storageDescriptor], ["FileReader", readerDescriptor]] as const) {
         if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name);
     }
 });

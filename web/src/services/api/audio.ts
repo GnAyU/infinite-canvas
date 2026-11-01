@@ -1,6 +1,7 @@
 import axios from "axios";
 import { redactText } from "@/lib/secret-redaction";
 import { channelAxios, channelFetch } from "./channel-request";
+import { inlineMediaBlob, normalizeMediaBlob } from "./media-result";
 
 import i18n from "@/i18n";
 import { audioMimeType, normalizeAudioFormatValue, normalizeAudioSpeedValue, normalizeAudioVoiceValue } from "@/lib/audio-generation";
@@ -61,30 +62,30 @@ export async function requestAudioGeneration(config: AiConfig, prompt: string, o
             },
             headers: aiHeaders(requestConfig), responseType: "blob", signal: options?.signal,
         });
-        await assertAudioBlob(response.data);
-        return response.data.type.startsWith("audio/") ? response.data : new Blob([response.data], { type: audioMimeType(format) });
+        return await normalizeMediaBlob(response.data, "audio", [requestConfig.apiKey], audioMimeType(format));
     } catch (error) {
         throw new Error(readAxiosError(error, apiText("audioGenerationFailed"), requestConfig.apiKey));
     }
 }
 
 async function audioPluginBlob(config: AiConfig, result: unknown, format: string, options?: RequestOptions): Promise<Blob> {
-    if (result instanceof Blob) return result.type.startsWith("audio/") ? result : new Blob([result], { type: audioMimeType(format) });
+    if (result instanceof Blob) return normalizeMediaBlob(result, "audio", [config.apiKey], audioMimeType(format));
     let source = "";
     if (typeof result === "string") source = result;
     else if (result && typeof result === "object") {
         const record = result as Record<string, unknown>;
+        if (record.blob instanceof Blob) return normalizeMediaBlob(record.blob, "audio", [config.apiKey], audioMimeType(format));
         source = typeof record.b64_json === "string" ? record.b64_json : typeof record.data === "string" ? record.data : typeof record.url === "string" ? record.url : "";
     }
     if (!source) throw new Error(apiText("scriptNoAudio"));
     const url = source.startsWith("data:") || /^https?:/i.test(source) ? source : `data:${audioMimeType(format)};base64,${source}`;
-    const response = url.startsWith("data:") ? await fetch(url, { signal: options?.signal }) : await channelFetch(config, url, { headers: aiHeaders(config), signal: options?.signal });
-    const blob = await response.blob();
-    return blob.type.startsWith("audio/") ? blob : new Blob([blob], { type: audioMimeType(format) });
+    if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    return /^data:/i.test(url) ? inlineMediaBlob(url, "audio", [config.apiKey], audioMimeType(format))
+        : normalizeMediaBlob(await (await channelFetch(config, url, { headers: aiHeaders(config), signal: options?.signal })).blob(), "audio", [config.apiKey], audioMimeType(format));
 }
 
 export async function storeGeneratedAudio(blob: Blob, format = "mp3"): Promise<UploadedFile> {
-    const audio = blob.type.startsWith("audio/") ? blob : new Blob([blob], { type: audioMimeType(format) });
+    const audio = await normalizeMediaBlob(blob, "audio", [], audioMimeType(format));
     return uploadMediaFile(audio, "audio");
 }
 
@@ -93,18 +94,6 @@ function assertAudioConfig(config: AiConfig, model: string) {
     if (!config.baseUrl.trim()) throw new Error(apiText("baseUrlRequired"));
     if (!config.apiKey.trim()) throw new Error(apiText("apiKeyRequired"));
     if (config.apiFormat === "gemini") throw new Error(apiText("geminiAudioUnsupported"));
-}
-
-async function assertAudioBlob(blob: Blob) {
-    if (!blob.type.includes("json")) return;
-    let payload: { code?: number; msg?: string; error?: { message?: string } };
-    try {
-        payload = JSON.parse(await blob.text()) as { code?: number; msg?: string; error?: { message?: string } };
-    } catch {
-        return;
-    }
-    if (typeof payload.code === "number" && payload.code !== 0) throw new Error(payload.msg || apiText("audioGenerationFailed"));
-    if (payload.error?.message) throw new Error(payload.error.message);
 }
 
 function readApiErrorMessage(value: unknown): string {

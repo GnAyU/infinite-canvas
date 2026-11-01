@@ -44,7 +44,12 @@ export function channelAxios<T>(config: ChannelRecipient, path: string, options:
         adapter: "fetch",
         withCredentials: false,
         fetchOptions: { redirect: "error", credentials: "omit", referrerPolicy: "no-referrer" },
-        env: { fetch: (input, init) => fetch(input, { ...init, redirect: "error", credentials: "omit", referrerPolicy: "no-referrer" }) },
+        env: { fetch: (input, init) => {
+            // Axios has now applied defaults, baseURL, params and paramsSerializer.
+            // Reject the actual Request recipient before transport, never strip auth and retry.
+            channelRequestUrl(config, input instanceof Request ? input.url : String(input));
+            return fetch(input, { ...init, redirect: "error", credentials: "omit", referrerPolicy: "no-referrer" });
+        } },
     });
 }
 

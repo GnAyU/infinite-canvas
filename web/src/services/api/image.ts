@@ -1,6 +1,7 @@
 import axios from "axios";
 import { redactText } from "@/lib/secret-redaction";
 import { channelAxios, channelFetch } from "./channel-request";
+import { inlineMediaBlob, normalizeMediaBlob } from "./media-result";
 
 import i18n from "@/i18n";
 import { buildApiUrl, resolveModelRequestConfig, resolveModelScript, withLocalProxy, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
@@ -247,12 +248,14 @@ async function parseImagePayload(config: AiConfig, payload: ImageApiResponse, op
     return localImageResults(config, images, options);
 }
 
-async function localImageResults(config: AiConfig, images: Array<{ id: string; dataUrl: string }>, options?: RequestOptions) {
+async function localImageResults(config: AiConfig, images: Array<{ id: string; dataUrl: string | Blob }>, options?: RequestOptions) {
     return Promise.all(images.map(async (image) => {
         if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
-        if (image.dataUrl.startsWith("data:")) return image;
-        const response = await channelFetch(config, image.dataUrl, { headers: config.apiFormat === "gemini" ? geminiHeaders(config) : aiHeaders(config), signal: options?.signal });
-        const blob = await response.blob();
+        const source = image.dataUrl;
+        const blob = source instanceof Blob ? await normalizeMediaBlob(source, "image", [config.apiKey])
+            : /^data:/i.test(source) ? await inlineMediaBlob(source, "image", [config.apiKey])
+            : await normalizeMediaBlob(await (await channelFetch(config, source, { headers: config.apiFormat === "gemini" ? geminiHeaders(config) : aiHeaders(config), signal: options?.signal })).blob(), "image", [config.apiKey]);
+        if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
         const dataUrl = await readFileAsDataUrl(new File([blob], "generated-image", { type: blob.type }));
         return { ...image, dataUrl };
     }));

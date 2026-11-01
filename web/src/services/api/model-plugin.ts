@@ -4,6 +4,7 @@ import i18n from "@/i18n";
 import { redactText } from "@/lib/secret-redaction";
 import { type AiConfig, type ModelCapability } from "@/stores/use-config-store";
 import { channelFetch, channelRequestUrl } from "./channel-request";
+import { normalizeMediaBlob } from "./media-result";
 
 type RequestOptions = { signal?: AbortSignal };
 
@@ -151,6 +152,12 @@ export async function runModelPlugin<T = unknown>(args: RunPluginArgs): Promise<
             args.onDelta,
         );
         if (args.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+        if (args.capability !== "text") {
+            if (result instanceof Blob) return await normalizeMediaBlob(result, args.capability, [config.apiKey]) as T;
+            if (result && typeof result === "object" && "blob" in result && result.blob instanceof Blob) {
+                return { ...result, blob: await normalizeMediaBlob(result.blob, args.capability, [config.apiKey]) };
+            }
+        }
         return result;
     } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") throw error;
@@ -968,13 +975,15 @@ return await generateText({
 }
 
 /** Normalize whatever an image script returns into the app's generated-image shape. */
-export function normalizePluginImages(result: unknown): string[] {
+export function normalizePluginImages(result: unknown): Array<string | Blob> {
     const items = Array.isArray(result) ? result : [result];
     const urls = items
         .map((item) => {
+            if (item instanceof Blob) return item;
             if (typeof item === "string") return item;
             if (item && typeof item === "object") {
                 const record = item as Record<string, unknown>;
+                if (record.blob instanceof Blob) return record.blob;
                 if (typeof record.dataUrl === "string") return record.dataUrl;
                 if (typeof record.url === "string") return record.url;
                 if (typeof record.b64_json === "string") return `data:image/png;base64,${record.b64_json}`;

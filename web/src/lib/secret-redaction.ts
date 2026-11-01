@@ -1,7 +1,18 @@
 import { useConfigStore } from "@/stores/use-config-store";
 
 const REDACTED = "[REDACTED]";
-const secretField = /^(?:authorization|proxy-authorization|x-goog-api-key|api[-_]?key|password|username|token|access[-_]?token|secret|credential)$/i;
+const secretField = /^(?:key|authorization|proxy-authorization|x-goog-api-key|api[-_]?key|password|username|token|access[-_]?token|secret|credential)$/i;
+
+function decodeLogText(value: string) {
+    let text = value;
+    for (;;) {
+        const decoded = text.replace(/(?:%[\da-f]{2})+/gi, (part) => {
+            try { return decodeURIComponent(part); } catch { return REDACTED; }
+        });
+        if (decoded === text) return text;
+        text = decoded;
+    }
+}
 
 /** Redact copies at logging/error boundaries, never mutate or silently erase stored settings. */
 export function redactText(value: string, extraSecrets: string[] = []) {
@@ -12,13 +23,14 @@ export function redactText(value: string, extraSecrets: string[] = []) {
         secrets.push(btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join("")));
     }
     try { secrets.push(localStorage.getItem("canvas-agent-token") || ""); } catch { /* Storage may be unavailable. */ }
-    let text = value;
+    // Redact whole raw parameter values before decoding delimiters inside them.
+    let text = decodeLogText(value.replace(/([?&#])([^=\s&#"'<>]+)=([^\s&#"'<>]*)/g, (match, prefix: string, name: string) => secretField.test(decodeLogText(name)) ? `${prefix}${name}=${REDACTED}` : match));
     for (const secret of secrets.filter(Boolean).sort((a, b) => b.length - a.length)) {
-        text = text.split(secret).join(REDACTED).split(encodeURIComponent(secret)).join(REDACTED);
+        text = text.split(secret).join(REDACTED).split(decodeLogText(secret)).join(REDACTED);
     }
     return text
         .replace(/(https?:\/\/)[^\s/]+@/gi, `$1${REDACTED}@`)
-        .replace(/([?&#](?:key|api[-_]?key|token|access[-_]?token|authorization|password|secret|credential)=)[^\s&#"'<>]*/gi, `$1${REDACTED}`)
+        .replace(/([?&#](?:key|api[-_]?key|x-goog-api-key|token|access[-_]?token|authorization|proxy-authorization|username|password|secret|credential)=)[^\s&#"'<>]*/gi, `$1${REDACTED}`)
         .replace(/((?:authorization|proxy-authorization|x-goog-api-key|api[-_]?key|password|username|token)\s*["']?\s*[:=]\s*["']?)(?:(?:Bearer|Basic)\s+)?[^\s,;"'{}\]]+/gi, `$1${REDACTED}`);
 }
 
@@ -27,10 +39,10 @@ export function redactLogValue(value: unknown, seen = new WeakSet<object>()): un
     if (!value || typeof value !== "object") return value;
     if (seen.has(value)) return "[Circular]";
     seen.add(value);
-    if (value instanceof Error) return { name: value.name, message: redactText(value.message) };
+    if (value instanceof Error) return { name: redactText(value.name), message: redactText(value.message) };
     if (value instanceof Headers) return redactLogValue(Object.fromEntries(value.entries()), seen);
     if (Array.isArray(value)) return value.map((item) => redactLogValue(item, seen));
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, secretField.test(key) ? REDACTED : redactLogValue(item, seen)]));
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [redactText(key), secretField.test(decodeLogText(key)) ? REDACTED : redactLogValue(item, seen)]));
 }
 
 export function logError(...args: unknown[]) {
