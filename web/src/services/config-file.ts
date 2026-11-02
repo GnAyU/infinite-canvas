@@ -1,7 +1,7 @@
 import { saveAs } from "file-saver";
 
 import i18n from "@/i18n";
-import { redactText } from "@/lib/secret-redaction";
+import { classifyUrlCredentials, redactText } from "@/lib/secret-redaction";
 import { channelPlaintextWarning, defaultConfig, useConfigStore, type AiConfig, type WebdavSyncConfig } from "@/stores/use-config-store";
 import { usePromptSourceStore, type PromptSourceSchedule } from "@/stores/use-prompt-source-store";
 import type { PromptSource } from "@/services/api/prompt-source-presets";
@@ -21,16 +21,7 @@ type AppConfigFile = {
 
 /** Whitelist v1 fields. Free text/identities are not a reliable secret detector. */
 function projectExport(config: AiConfig, webdav: WebdavSyncConfig, sources: PromptSource[], schedule: PromptSourceSchedule) {
-    const safeUrl = (value: string) => {
-        let url: URL;
-        try { url = new URL(value); }
-        catch {
-            // A fixed base classifies relative authorities only; never rewrite the exported value.
-            try { url = new URL(value, "https://config-export.invalid/"); }
-            catch { return undefined; }
-        }
-        return url.username || url.password || redactText(value).includes("[REDACTED]") ? undefined : value;
-    };
+    const safeUrl = (value: string) => classifyUrlCredentials(value) !== "safe" || redactText(value).includes("[REDACTED]") ? undefined : value;
     return {
         config: {
             ...Object.fromEntries(Object.keys(defaultConfig).filter(key => !["apiKey", "channels"].includes(key)).map(key => [key, config[key as keyof AiConfig]])),

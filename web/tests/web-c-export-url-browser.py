@@ -1,4 +1,4 @@
-"""WEB-C F1: real editor -> default downloaded JSON, then structural service controls.
+"""WEB-C F1/F2: real editor -> default downloaded JSON, then parsed URL controls.
 Use task-owned Vite on 127.0.0.1:43215; synthetic values and disposable Chrome only.
 uv run --offline --no-project --with playwright python web/tests/web-c-export-url-browser.py
 """
@@ -9,9 +9,10 @@ from pathlib import Path
 from playwright.async_api import async_playwright
 
 ORIGIN = 'http://127.0.0.1:43215'
-OUT = Path(__file__).resolve().parents[2] / '.local-tools/web-c-f1-evidence/browser'
+OUT = Path(__file__).resolve().parents[2] / '.local-tools/web-c-f2-evidence/browser'
 REPORT = {'checks': [], 'external_requests': [], 'page_errors': [], 'failure': None}
 PASSWORD = 'synthetic-f1-ui-password'
+QUERY = 'synthetic-f2-ui-query'
 
 
 def check(name, condition):
@@ -41,6 +42,8 @@ async def main():
             addresses = [
                 'https:' + chr(92) * 2 + f'alice:{PASSWORD}@feed.invalid/list.json',
                 f'https://alice:{PASSWORD}@feed.invalid/list.json',
+                f'https://feed.invalid/list.json?api\t_key={QUERY}',
+                f'https://feed.invalid/list.json?%61pi\t_key={QUERY}',
                 'https://feed.invalid/path@label/list.json?view=public#section',
             ]
             for index, address in enumerate(addresses):
@@ -55,7 +58,8 @@ async def main():
             # Read back only AFTER real UI intake; no fixture/store seeding establishes this reproduction.
             originals = await page.evaluate("async()=>{const s=await import('/src/stores/use-prompt-source-store.ts');return JSON.parse(JSON.stringify(s.usePromptSourceStore.getState().sources))}")
             created = [s for s in originals if s['name'].startswith('Synthetic F1 source ')]
-            check('real editor preserved exact original URL bytes and identities', len(created) == 3 and [s['url'] for s in created] == addresses and len({s['id'] for s in created}) == 3)
+            check('real editor preserved exact URL/homepage bytes including literal TAB and identities', len(created) == len(addresses) and [s['url'] for s in created] == addresses and [s['homepage'] for s in created] == addresses and len({s['id'] for s in created}) == len(addresses))
+            check('browser parses both literal TAB query names as api_key', await page.evaluate('(addresses)=>addresses.slice(2,4).every(value=>[...new URL(value).searchParams.keys()][0]==="api_key")', addresses))
             before = await page.evaluate('JSON.stringify(localStorage)')
             async with page.expect_download() as event:
                 await page.get_by_role('button', name='脱敏导出', exact=True).click()
@@ -64,6 +68,7 @@ async def main():
             await download.save_as(path)
             raw = path.read_text()
             safe = json.loads(raw)
+            check('actual default file contains no TAB-split query credential canary', QUERY not in raw)
             check('actual default file contains no structured URL password canary', PASSWORD not in raw)
             check('default download retains v1 app and filename without sensitive confirmation', safe['app'] == 'infinite-canvas' and safe['version'] == 1 and download.suggested_filename == 'infinite-canvas-config.json' and await page.get_by_role('dialog').filter(has_text='完整敏感导出包含明文').count() == 0)
             for source in created:
@@ -108,6 +113,25 @@ async def main():
             }''')
             for index, row in enumerate(rows):
                 check(f'structural form {index}: all six URL slots omit credentials and retain identities', row == {'omitted': True, 'canaryAbsent': True, 'channelId': 'default', 'sourceId': 'exact-f1-service'})
+            # Exercise all six slots in an ACTUAL download per parsed query form;
+            # only prompt-source intake above is claimed as editor admission.
+            for index, name in enumerate(['api\t_key', '%61pi\t_key']):
+                address = f'https://feed.invalid/list.json?{name}={QUERY}'
+                await page.evaluate('''async address => {
+                    const c=await import('/src/stores/use-config-store.ts'),s=await import('/src/stores/use-prompt-source-store.ts');
+                    c.useConfigStore.setState({config:{...structuredClone(c.defaultConfig),baseUrl:address,proxyUrl:address,channels:[{...structuredClone(c.defaultConfig.channels[0]),baseUrl:address}]},webdav:{...c.defaultWebdavSyncConfig,url:address}});
+                    s.usePromptSourceStore.setState({sources:[{id:'exact-f2-service',name:'Service source',url:address,homepage:address,enabled:false,builtIn:false}]});
+                }''', address)
+                before = await page.evaluate('JSON.stringify(localStorage)')
+                async with page.expect_download() as event:
+                    await page.get_by_role('button', name='脱敏导出', exact=True).click()
+                path = OUT / f'all-six-query-{index}-safe-download.json'
+                await (await event.value).save_as(path)
+                raw = path.read_text()
+                safe = json.loads(raw)
+                slots = [(safe['config'], 'baseUrl'), (safe['config'], 'proxyUrl'), (safe['config']['channels'][0], 'baseUrl'), (safe['webdav'], 'url'), (safe['promptSources']['sources'][0], 'url'), (safe['promptSources']['sources'][0], 'homepage')]
+                check(f'parsed query form {index}: actual default download omits all six URL fields and canary without masks', all(field not in owner for owner, field in slots) and QUERY not in raw and '[REDACTED]' not in raw)
+                check(f'parsed query form {index}: retains exact identities, original settings and no sensitive consent', safe['config']['channels'][0]['id'] == 'default' and safe['promptSources']['sources'][0]['id'] == 'exact-f2-service' and await page.evaluate('JSON.stringify(localStorage)') == before and await page.get_by_role('dialog').filter(has_text='完整敏感导出包含明文').count() == 0)
             check('no external or companion requests', not REPORT['external_requests'])
             check('no unhandled page errors', not REPORT['page_errors'])
         finally:

@@ -15,8 +15,21 @@ function decodeLogText(value: string) {
     }
 }
 
+/** Classify parsed components, but never normalize the original value being exported. */
+export function classifyUrlCredentials(value: string) {
+    let url: URL;
+    try { url = new URL(value); }
+    catch {
+        // Absolute first; the inert base is only for relative references, never a request.
+        try { url = new URL(value, "https://config-export.invalid/"); }
+        catch { return "invalid"; }
+    }
+    return url.username || url.password || [...url.searchParams.keys()].some(name => secretField.test(decodeLogText(name))) ? "sensitive" : "safe";
+}
+
 /** Redact copies at logging/error boundaries, never mutate or silently erase stored settings. */
 export function redactText(value: string, extraSecrets: string[] = []) {
+    if (classifyUrlCredentials(value) === "sensitive") return REDACTED;
     const { config, webdav } = useConfigStore.getState();
     const secrets = [...extraSecrets, config.apiKey, ...config.channels.map((channel) => channel.apiKey), webdav.username, webdav.password];
     if (webdav.username || webdav.password) {
