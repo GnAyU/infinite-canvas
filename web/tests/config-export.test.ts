@@ -53,6 +53,63 @@ test("export whitelist omits Agent/proxy tokens and headers while credential-bea
     } finally { usePromptSourceStore.setState({ sources: original.sources, schedule: original.schedule }); }
 });
 
+test("safe export structurally omits browser-recognized userinfo from every URL slot", async () => {
+    const { usePromptSourceStore } = await import("../src/stores/use-prompt-source-store");
+    const original = usePromptSourceStore.getState();
+    const userinfo = "synthetic-url-user:synthetic-url-password@feed.invalid/list.json";
+    const addresses = [
+        `https://${userinfo}`, String.raw`https:\\${userinfo}`, `//${userinfo}`,
+        `https:/${userinfo}`, `https:${userinfo}`, String.raw`\\${userinfo}`,
+        ` \thttps://synthetic-url-user:synthetic-url-pass\nword@feed.invalid/list.json\r `,
+        "https://synthetic-url-user@feed.invalid/list.json",
+        "https://%73ynthetic-url-user:%73ynthetic-url-password@feed.invalid/list.json",
+    ];
+    try {
+        for (const address of addresses) {
+            let parsed: URL;
+            try { parsed = new URL(address); }
+            catch { parsed = new URL(address, "https://export.invalid/"); }
+            expect(parsed.username).not.toBe("");
+            useConfigStore.setState({ config: { ...structuredClone(defaultConfig), baseUrl: address, proxyUrl: address, channels: [{ ...structuredClone(defaultConfig.channels[0]), baseUrl: address }] }, webdav: { ...defaultWebdavSyncConfig, url: address } });
+            usePromptSourceStore.setState({ sources: [{ id: "url-source", name: "URL source", url: address, homepage: address, enabled: false, builtIn: false }] });
+            const before = JSON.stringify({ config: useConfigStore.getState().config, webdav: useConfigStore.getState().webdav, sources: usePromptSourceStore.getState().sources });
+            const serialized = JSON.stringify(configFile.createAppConfigExport());
+            const safe = JSON.parse(serialized);
+            for (const [owner, field] of [[safe.config, "baseUrl"], [safe.config, "proxyUrl"], [safe.config.channels[0], "baseUrl"], [safe.webdav, "url"], [safe.promptSources.sources[0], "url"], [safe.promptSources.sources[0], "homepage"]] as const) expect(owner).not.toHaveProperty(field);
+            expect(serialized).not.toContain("synthetic-url-");
+            expect(serialized).not.toContain("[REDACTED]");
+            expect(safe.config.channels[0].id).toBe("default");
+            expect(safe.promptSources.sources[0].id).toBe("url-source");
+            expect(JSON.stringify({ config: useConfigStore.getState().config, webdav: useConfigStore.getState().webdav, sources: usePromptSourceStore.getState().sources })).toBe(before);
+            const sensitive = JSON.parse(JSON.stringify(await configFile.createSensitiveAppConfigExport(async () => true)));
+            expect(sensitive.config.baseUrl).toBe(address);
+            expect(sensitive.config.proxyUrl).toBe(address);
+            expect(sensitive.config.channels[0].baseUrl).toBe(address);
+            expect(sensitive.webdav.url).toBe(address);
+            expect(sensitive.promptSources.sources[0].url).toBe(address);
+            expect(sensitive.promptSources.sources[0].homepage).toBe(address);
+        }
+    } finally { usePromptSourceStore.setState({ sources: original.sources, schedule: original.schedule }); }
+});
+
+test("safe export preserves credential-free URL bytes and arbitrary text rather than normalizing identities", async () => {
+    const { usePromptSourceStore } = await import("../src/stores/use-prompt-source-store");
+    const original = usePromptSourceStore.getState();
+    const addresses = ["https://feed.invalid/path@label/list.json?view=public#section", String.raw`https:\\feed.invalid/list.json`, "//feed.invalid/list.json", "/relative/list.json", ""];
+    const text = String.raw`Free text https:\\alice:synthetic-free-text@feed.invalid/ needs manual review`;
+    try {
+        for (const address of addresses) {
+            useConfigStore.setState({ config: { ...structuredClone(defaultConfig), baseUrl: address, proxyUrl: address, systemPrompt: text, channels: [{ ...structuredClone(defaultConfig.channels[0]), id: "exact-channel", name: text, baseUrl: address }] }, webdav: { ...defaultWebdavSyncConfig, url: address } });
+            usePromptSourceStore.setState({ sources: [{ id: "exact-source", name: text, url: address, homepage: address, enabled: false, builtIn: false }] });
+            const safe = JSON.parse(JSON.stringify(configFile.createAppConfigExport()));
+            expect([safe.config.baseUrl, safe.config.proxyUrl, safe.config.channels[0].baseUrl, safe.webdav.url, safe.promptSources.sources[0].url, safe.promptSources.sources[0].homepage]).toEqual(Array(6).fill(address));
+            expect(safe.config.channels[0].id).toBe("exact-channel");
+            expect(safe.promptSources.sources[0].id).toBe("exact-source");
+            expect([safe.config.systemPrompt, safe.config.channels[0].name, safe.promptSources.sources[0].name]).toEqual([text, text, text]);
+        }
+    } finally { usePromptSourceStore.setState({ sources: original.sources, schedule: original.schedule }); }
+});
+
 test("sensitive export requires fresh confirmation for every plaintext snapshot", async () => {
     const secret = "synthetic-sensitive-export-canary";
     useConfigStore.setState({ config: { ...structuredClone(defaultConfig), apiKey: secret, channels: [{ ...defaultConfig.channels[0], apiKey: secret, models: [{ name: "gpt-5.5", capability: "text", script: `return '${secret}';` }] }] } });

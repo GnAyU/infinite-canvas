@@ -21,7 +21,16 @@ type AppConfigFile = {
 
 /** Whitelist v1 fields. Free text/identities are not a reliable secret detector. */
 function projectExport(config: AiConfig, webdav: WebdavSyncConfig, sources: PromptSource[], schedule: PromptSourceSchedule) {
-    const safeUrl = (value: string) => redactText(value).includes("[REDACTED]") ? undefined : value;
+    const safeUrl = (value: string) => {
+        let url: URL;
+        try { url = new URL(value); }
+        catch {
+            // A fixed base classifies relative authorities only; never rewrite the exported value.
+            try { url = new URL(value, "https://config-export.invalid/"); }
+            catch { return undefined; }
+        }
+        return url.username || url.password || redactText(value).includes("[REDACTED]") ? undefined : value;
+    };
     return {
         config: {
             ...Object.fromEntries(Object.keys(defaultConfig).filter(key => !["apiKey", "channels"].includes(key)).map(key => [key, config[key as keyof AiConfig]])),
