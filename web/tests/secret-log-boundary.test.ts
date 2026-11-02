@@ -36,6 +36,32 @@ test("URL redaction classifies browser-normalized credentials without configured
     expect(JSON.stringify(useConfigStore.getState())).toBe(before);
 });
 
+test("logError omits normalized fragment secrets from scalar, object and Error messages", async () => {
+    const { logError, redactText } = await import("../src/lib/secret-redaction");
+    const canary = "synthetic-f3-unconfigured-fragment";
+    const before = JSON.stringify(useConfigStore.getState());
+    const output: unknown[] = [];
+    const originalError = console.error;
+    console.error = (...args) => { output.push(args); };
+    try {
+        for (const name of ["api\t_key", "%61pi\t_key", "authori\tzation", "api\r_key", "api\n_key", "api_key"]) {
+            const address = `https://feed.invalid/#${name}=${canary}`;
+            const object = { url: address };
+            const error = new Error(address);
+            logError(address, object, error);
+            expect(JSON.stringify(output.at(-1))).not.toContain(canary);
+            expect(output.at(-1)).toEqual(["[REDACTED]", { url: "[REDACTED]" }, { name: "Error", message: "[REDACTED]" }]);
+            expect(object.url).toBe(address);
+            expect(error.message).toBe(address);
+        }
+        const safe = "https://feed.invalid/#section=public";
+        logError(safe, { url: safe }, new Error(safe));
+        expect(output.at(-1)).toEqual([safe, { url: safe }, { name: "Error", message: safe }]);
+        expect(redactText("https://feed.invalid/#sec\ttion=public")).toBe("https://feed.invalid/#sec\ttion=public");
+        expect(JSON.stringify(useConfigStore.getState())).toBe(before);
+    } finally { console.error = originalError; }
+});
+
 test("plugin error echo cannot persist selected channel key or sensitive URL values", async () => {
     let error = "";
     try { await runModelPlugin({ config, capability: "text", script: `throw new Error(apiKey + ' https://synthetic.invalid/?key=${token}#token=${token}');` }); } catch (e) { error = String(e); }

@@ -24,7 +24,8 @@ export function classifyUrlCredentials(value: string) {
         try { url = new URL(value, "https://config-export.invalid/"); }
         catch { return "invalid"; }
     }
-    return url.username || url.password || [...url.searchParams.keys()].some(name => secretField.test(decodeLogText(name))) ? "sensitive" : "safe";
+    const names = [...url.searchParams.keys(), ...new URLSearchParams(url.hash.slice(1)).keys()];
+    return url.username || url.password || names.some(name => secretField.test(decodeLogText(name))) ? "sensitive" : "safe";
 }
 
 /** Redact copies at logging/error boundaries, never mutate or silently erase stored settings. */

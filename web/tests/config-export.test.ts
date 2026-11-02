@@ -119,10 +119,35 @@ test("safe export omits browser-normalized query credentials from every URL slot
     } finally { usePromptSourceStore.setState({ sources: original.sources, schedule: original.schedule }); }
 });
 
+test("safe export omits browser-normalized fragment credentials from every URL slot", async () => {
+    const { usePromptSourceStore } = await import("../src/stores/use-prompt-source-store");
+    const original = usePromptSourceStore.getState();
+    const canary = "synthetic-f3-fragment-canary";
+    const names = ["api\t_key", "%61pi\t_key", "access\ttoken", "x-goog-api-\tkey", "authori\tzation", "pass\tword", "user\tname", "creden\ttial", "api\r_key", "api\n_key", "api_key", "%2561pi_key"];
+    try {
+        for (const name of names) {
+            const address = `https://feed.invalid/list.json#section=public&${name}=${canary}`;
+            expect([...new URLSearchParams(new URL(address).hash.slice(1)).keys()].some(key => /[\t\r\n]/.test(key))).toBe(false);
+            useConfigStore.setState({ config: { ...structuredClone(defaultConfig), baseUrl: address, proxyUrl: address, channels: [{ ...structuredClone(defaultConfig.channels[0]), baseUrl: address }] }, webdav: { ...defaultWebdavSyncConfig, url: address } });
+            usePromptSourceStore.setState({ sources: [{ id: "f3-fragment-source", name: "Fragment source", url: address, homepage: address, enabled: false, builtIn: false }] });
+            const before = JSON.stringify({ config: useConfigStore.getState().config, webdav: useConfigStore.getState().webdav, sources: usePromptSourceStore.getState().sources });
+            const safe = JSON.parse(JSON.stringify(configFile.createAppConfigExport()));
+            for (const [owner, field] of [[safe.config, "baseUrl"], [safe.config, "proxyUrl"], [safe.config.channels[0], "baseUrl"], [safe.webdav, "url"], [safe.promptSources.sources[0], "url"], [safe.promptSources.sources[0], "homepage"]] as const) expect(owner).not.toHaveProperty(field);
+            expect(JSON.stringify(safe)).not.toContain(canary);
+            expect(JSON.stringify(safe)).not.toContain("[REDACTED]");
+            expect(safe.config.channels[0].id).toBe("default");
+            expect(safe.promptSources.sources[0].id).toBe("f3-fragment-source");
+            expect(JSON.stringify({ config: useConfigStore.getState().config, webdav: useConfigStore.getState().webdav, sources: usePromptSourceStore.getState().sources })).toBe(before);
+            const sensitive = JSON.parse(JSON.stringify(await configFile.createSensitiveAppConfigExport(async () => true)));
+            expect([sensitive.config.baseUrl, sensitive.config.proxyUrl, sensitive.config.channels[0].baseUrl, sensitive.webdav.url, sensitive.promptSources.sources[0].url, sensitive.promptSources.sources[0].homepage]).toEqual(Array(6).fill(address));
+        }
+    } finally { usePromptSourceStore.setState({ sources: original.sources, schedule: original.schedule }); }
+});
+
 test("safe export preserves credential-free URL bytes and arbitrary text rather than normalizing identities", async () => {
     const { usePromptSourceStore } = await import("../src/stores/use-prompt-source-store");
     const original = usePromptSourceStore.getState();
-    const addresses = ["https://feed.invalid/path@label/list.json?view=public#section", String.raw`https:\\feed.invalid/list.json`, "//feed.invalid/list.json", "/relative/list.json", "", "https://feed.invalid/list.json?cate\tgory=public", "https://feed.invalid/list.json?label=api_key", "https://feed.invalid/list.json?api%09_key=public"];
+    const addresses = ["https://feed.invalid/path@label/list.json?view=public#section", String.raw`https:\\feed.invalid/list.json`, "//feed.invalid/list.json", "/relative/list.json", "", "https://feed.invalid/list.json?cate\tgory=public", "https://feed.invalid/list.json?label=api_key", "https://feed.invalid/list.json?api%09_key=public", "https://feed.invalid/list.json#section=public", "https://feed.invalid/list.json#sec\ttion=public", "https://feed.invalid/list.json#label=api_key", "https://feed.invalid/list.json#api%09_key=public"];
     const text = String.raw`Free text https:\\alice:synthetic-free-text@feed.invalid/ needs manual review`;
     try {
         for (const address of addresses) {

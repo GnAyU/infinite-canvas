@@ -1,4 +1,4 @@
-"""WEB-C F1/F2: real editor -> default downloaded JSON, then parsed URL controls.
+"""WEB-C F1/F2/F3: real editor -> default downloaded JSON, then parsed URL/log controls.
 Use task-owned Vite on 127.0.0.1:43215; synthetic values and disposable Chrome only.
 uv run --offline --no-project --with playwright python web/tests/web-c-export-url-browser.py
 """
@@ -9,10 +9,11 @@ from pathlib import Path
 from playwright.async_api import async_playwright
 
 ORIGIN = 'http://127.0.0.1:43215'
-OUT = Path(__file__).resolve().parents[2] / '.local-tools/web-c-f2-evidence/browser'
+OUT = Path(__file__).resolve().parents[2] / '.local-tools/web-c-f3-evidence/browser'
 REPORT = {'checks': [], 'external_requests': [], 'page_errors': [], 'failure': None}
 PASSWORD = 'synthetic-f1-ui-password'
 QUERY = 'synthetic-f2-ui-query'
+FRAGMENT = 'synthetic-f3-ui-fragment'
 
 
 def check(name, condition):
@@ -44,6 +45,10 @@ async def main():
                 f'https://alice:{PASSWORD}@feed.invalid/list.json',
                 f'https://feed.invalid/list.json?api\t_key={QUERY}',
                 f'https://feed.invalid/list.json?%61pi\t_key={QUERY}',
+                f'https://feed.invalid/list.json#api\t_key={FRAGMENT}',
+                f'https://feed.invalid/list.json#%61pi\t_key={FRAGMENT}',
+                f'https://feed.invalid/list.json#api_key={FRAGMENT}',
+                'https://feed.invalid/list.json#section=public',
                 'https://feed.invalid/path@label/list.json?view=public#section',
             ]
             for index, address in enumerate(addresses):
@@ -60,6 +65,7 @@ async def main():
             created = [s for s in originals if s['name'].startswith('Synthetic F1 source ')]
             check('real editor preserved exact URL/homepage bytes including literal TAB and identities', len(created) == len(addresses) and [s['url'] for s in created] == addresses and [s['homepage'] for s in created] == addresses and len({s['id'] for s in created}) == len(addresses))
             check('browser parses both literal TAB query names as api_key', await page.evaluate('(addresses)=>addresses.slice(2,4).every(value=>[...new URL(value).searchParams.keys()][0]==="api_key")', addresses))
+            check('browser parses normalized and ordinary fragment names as api_key', await page.evaluate('(addresses)=>addresses.slice(4,7).every(value=>[...new URLSearchParams(new URL(value).hash.slice(1)).keys()][0]==="api_key")', addresses))
             before = await page.evaluate('JSON.stringify(localStorage)')
             async with page.expect_download() as event:
                 await page.get_by_role('button', name='脱敏导出', exact=True).click()
@@ -70,11 +76,12 @@ async def main():
             safe = json.loads(raw)
             check('actual default file contains no TAB-split query credential canary', QUERY not in raw)
             check('actual default file contains no structured URL password canary', PASSWORD not in raw)
+            check('actual default file contains no normalized fragment credential canary', FRAGMENT not in raw)
             check('default download retains v1 app and filename without sensitive confirmation', safe['app'] == 'infinite-canvas' and safe['version'] == 1 and download.suggested_filename == 'infinite-canvas-config.json' and await page.get_by_role('dialog').filter(has_text='完整敏感导出包含明文').count() == 0)
             for source in created:
                 exported = next(s for s in safe['promptSources']['sources'] if s['id'] == source['id'])
                 check(f"source identity/name retained {source['name']}", exported['name'] == source['name'])
-                if source['url'] == addresses[-1]:
+                if source['url'] in addresses[-2:]:
                     check('credential-free URL with @ path is preserved verbatim', exported['url'] == source['url'] and exported['homepage'] == source['homepage'])
                 else:
                     check(f"credential-bearing URL/homepage omitted, not masked {source['name']}", 'url' not in exported and 'homepage' not in exported)
@@ -132,6 +139,40 @@ async def main():
                 slots = [(safe['config'], 'baseUrl'), (safe['config'], 'proxyUrl'), (safe['config']['channels'][0], 'baseUrl'), (safe['webdav'], 'url'), (safe['promptSources']['sources'][0], 'url'), (safe['promptSources']['sources'][0], 'homepage')]
                 check(f'parsed query form {index}: actual default download omits all six URL fields and canary without masks', all(field not in owner for owner, field in slots) and QUERY not in raw and '[REDACTED]' not in raw)
                 check(f'parsed query form {index}: retains exact identities, original settings and no sensitive consent', safe['config']['channels'][0]['id'] == 'default' and safe['promptSources']['sources'][0]['id'] == 'exact-f2-service' and await page.evaluate('JSON.stringify(localStorage)') == before and await page.get_by_role('dialog').filter(has_text='完整敏感导出包含明文').count() == 0)
+            for index, name in enumerate(['api\t_key', '%61pi\t_key', 'api_key', 'section']):
+                address = f'https://feed.invalid/list.json#{name}={"public" if name == "section" else FRAGMENT}'
+                await page.evaluate('''async address => {
+                    const c=await import('/src/stores/use-config-store.ts'),s=await import('/src/stores/use-prompt-source-store.ts');
+                    c.useConfigStore.setState({config:{...structuredClone(c.defaultConfig),baseUrl:address,proxyUrl:address,channels:[{...structuredClone(c.defaultConfig.channels[0]),baseUrl:address}]},webdav:{...c.defaultWebdavSyncConfig,url:address}});
+                    s.usePromptSourceStore.setState({sources:[{id:'exact-f3-service',name:'Fragment source',url:address,homepage:address,enabled:false,builtIn:false}]});
+                }''', address)
+                before = await page.evaluate('JSON.stringify(localStorage)')
+                async with page.expect_download() as event:
+                    await page.get_by_role('button', name='脱敏导出', exact=True).click()
+                path = OUT / f'all-six-fragment-{index}-safe-download.json'
+                await (await event.value).save_as(path)
+                raw = path.read_text()
+                safe = json.loads(raw)
+                slots = [(safe['config'], 'baseUrl'), (safe['config'], 'proxyUrl'), (safe['config']['channels'][0], 'baseUrl'), (safe['webdav'], 'url'), (safe['promptSources']['sources'][0], 'url'), (safe['promptSources']['sources'][0], 'homepage')]
+                check(f'parsed fragment form {index}: actual six-slot default download omits sensitive values or preserves safe original', (all(owner.get(field) == address for owner, field in slots) if name == 'section' else all(field not in owner for owner, field in slots)) and FRAGMENT not in raw and '[REDACTED]' not in raw)
+                check(f'parsed fragment form {index}: retains identity, settings and no sensitive consent', safe['config']['channels'][0]['id'] == 'default' and safe['promptSources']['sources'][0]['id'] == 'exact-f3-service' and await page.evaluate('JSON.stringify(localStorage)') == before and await page.get_by_role('dialog').filter(has_text='完整敏感导出包含明文').count() == 0)
+            logging = await page.evaluate('''async canary => {
+                const {logError}=await import('/src/lib/secret-redaction.ts');
+                const rows=[],original=console.error;
+                console.error=(...args)=>rows.push(args);
+                try {
+                    for (const name of ['api\\t_key','%61pi\\t_key','api_key','section']) {
+                        const address=`https://feed.invalid/#${name}=${name==='section'?'public':canary}`;
+                        const object={url:address},error=new Error(address);
+                        logError(address,object,error);
+                        rows.push({originalUnchanged:object.url===address&&error.message===address});
+                    }
+                } finally {console.error=original;}
+                return rows;
+            }''', FRAGMENT)
+            (OUT / 'logger-emissions.json').write_text(json.dumps(logging, indent=2))
+            check('actual logError scalar/object.url/Error.message contains no fragment canary', FRAGMENT not in json.dumps(logging))
+            check('actual logError omits sensitive whole values and preserves safe fragment and originals', all(logging[i] == ['[REDACTED]', {'url': '[REDACTED]'}, {'name': 'Error', 'message': '[REDACTED]'}] for i in [0, 2, 4]) and logging[6] == ['https://feed.invalid/#section=public', {'url': 'https://feed.invalid/#section=public'}, {'name': 'Error', 'message': 'https://feed.invalid/#section=public'}] and all(logging[i] == {'originalUnchanged': True} for i in [1, 3, 5, 7]))
             check('no external or companion requests', not REPORT['external_requests'])
             check('no unhandled page errors', not REPORT['page_errors'])
         finally:
