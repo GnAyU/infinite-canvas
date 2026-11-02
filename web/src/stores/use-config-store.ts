@@ -224,6 +224,15 @@ function isAiConfigReady(config: AiConfig, model: string) {
 // Keep them out of the reviewed non-bootstrap importer and out of persisted config.
 const bootstrapBindings = new Map<string, { endpoint: string; apiKey: string }>();
 
+/** Check before flattening channel identity or sending an unsaved editor draft. */
+export function assertBootstrapRecipient(config: { id?: string; baseUrl: string; apiKey: string }) {
+    const binding = config.id ? bootstrapBindings.get(config.id) : undefined;
+    const bindings = binding ? [binding] : [...bootstrapBindings.values()].filter((item) => item.apiKey && item.apiKey === config.apiKey);
+    if (config.apiKey && bindings.length && !bindings.some((item) => item.endpoint === config.baseUrl)) {
+        throw new Error("URL 导入的密钥仅限原始接口地址；接口已更改，已在发送前拒绝。请使用原始渠道。");
+    }
+}
+
 function confineBootstrapChannels(channels: ModelChannel[]) {
     return channels.map((channel) => {
         const binding = bootstrapBindings.get(channel.id);
@@ -478,6 +487,7 @@ export function resolveModelChannel(config: AiConfig, value: string) {
 
 export function resolveModelRequestConfig(config: AiConfig, value: string) {
     const channel = resolveModelChannel(config, value);
+    assertBootstrapRecipient(channel);
     return {
         ...config,
         model: modelOptionName(value || config.model),

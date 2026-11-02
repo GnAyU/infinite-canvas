@@ -1,4 +1,5 @@
 import axios, { type AxiosRequestConfig } from "axios";
+import { assertBootstrapRecipient } from "@/stores/use-config-store";
 
 type ChannelRecipient = { baseUrl: string; apiKey: string };
 const invalidRecipient = () => new Error("请求地址无效或不属于所选渠道；已在发送前拒绝。仅支持渠道配置的 HTTP(S) 精确来源及请求头认证。");
@@ -23,6 +24,7 @@ export function assertCredentialFreeUrl(value: string, secrets: string[] = []) {
 }
 
 export function channelRequestUrl(config: ChannelRecipient, path: string) {
+    assertBootstrapRecipient(config);
     const base = assertCredentialFreeUrl(config.baseUrl.trim(), [config.apiKey]);
     if (base.search) throw invalidRecipient();
     const value = path.trim();

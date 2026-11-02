@@ -65,3 +65,25 @@ test("bootstrap session credentials are inactive, exact-bound and absent from pe
     await useConfigStore.persist.rehydrate();
     expect(JSON.stringify(useConfigStore.getState().config)).not.toContain("synthetic-bootstrap-canary");
 });
+
+test("flattened bootstrap credentials reject changed recipients at the common transport boundary", async () => {
+    const { useConfigStore } = await import("../src/stores/use-config-store");
+    const { channelFetch, channelAxios } = await import("../src/services/api/channel-request");
+    const apiKey = "synthetic-transport-bootstrap-only";
+    useConfigStore.getState().importBootstrapCredentials("https://bound.invalid/v1", apiKey);
+    const previous = globalThis.fetch;
+    const requests: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+        requests.push(input instanceof Request ? input.url : String(input));
+        return Response.json({ data: [] });
+    }) as typeof fetch;
+    try {
+        for (const baseUrl of ["https://changed.invalid/v1", "https://bound.invalid/other/v1", "https://bound.invalid", "https://bound.invalid/v1/"]) {
+            await expect(channelFetch({ baseUrl, apiKey }, "/models")).rejects.toThrow("URL 导入的密钥");
+            await expect(Promise.resolve().then(() => channelAxios({ baseUrl, apiKey }, "/models"))).rejects.toThrow("URL 导入的密钥");
+        }
+        expect(requests).toEqual([]);
+        await channelFetch({ baseUrl: "https://bound.invalid/v1", apiKey }, "/models");
+        expect(requests).toEqual(["https://bound.invalid/v1/models"]);
+    } finally { globalThis.fetch = previous; }
+});
