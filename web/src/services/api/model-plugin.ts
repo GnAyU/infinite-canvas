@@ -2,6 +2,7 @@ import axios, { type AxiosRequestConfig } from "axios";
 
 import i18n from "@/i18n";
 import { redactText } from "@/lib/secret-redaction";
+import { assertExecutableTrusted } from "@/lib/executable-trust";
 import { type AiConfig, type ModelCapability } from "@/stores/use-config-store";
 import { channelFetch, channelRequestUrl } from "./channel-request";
 import { normalizeMediaBlob } from "./media-result";
@@ -107,6 +108,10 @@ function createPoll(signal?: AbortSignal) {
  * The script still runs as an async function body and must `return` the result.
  */
 export async function runModelPlugin<T = unknown>(args: RunPluginArgs): Promise<T> {
+    // Capture the body before awaiting so a mutable caller cannot swap approved bytes.
+    const script = args.script;
+    const checkTrust = await assertExecutableTrusted("model", script);
+    checkTrust();
     const { config } = args;
     const http = createPluginHttp(config, { signal: args.signal });
     const request = createPluginRequest(config, { signal: args.signal });
@@ -129,7 +134,7 @@ export async function runModelPlugin<T = unknown>(args: RunPluginArgs): Promise<
         "sleep",
         "signal",
         "onDelta",
-        `"use strict"; return (async () => {\n${args.script}\n})();`,
+        `"use strict"; return (async () => {\n${script}\n})();`,
     ) as (...fnArgs: unknown[]) => Promise<T>;
     try {
         const result = await runner(

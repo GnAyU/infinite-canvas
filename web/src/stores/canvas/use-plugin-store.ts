@@ -40,6 +40,8 @@ export const usePluginStore = create<PluginStore>()(
         {
             name: "infinite-canvas:plugin_store",
             storage: createJSONStorage(() => localForageStorage),
+            partialize: state => ({ plugins: state.plugins.map(plugin => ({ ...plugin, enabled: false })) }),
+            merge: (persisted, current) => ({ ...current, plugins: ((persisted as Partial<PluginStore>)?.plugins || []).map(plugin => ({ ...plugin, enabled: false })) }),
         },
     ),
 );

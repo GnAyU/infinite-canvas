@@ -1,9 +1,10 @@
 import { useMemo } from "react";
-import { create } from "zustand";
+import { create, type StateCreator } from "zustand";
 import { persist } from "zustand/middleware";
 import { nanoid } from "nanoid";
 
 import i18n from "@/i18n";
+import { revokeExecutableSource } from "@/lib/executable-trust";
 
 export type ApiCallFormat = "openai" | "gemini";
 export type ModelCapability = "image" | "video" | "text" | "audio";
@@ -224,6 +225,112 @@ function isAiConfigReady(config: AiConfig, model: string) {
 // Keep them out of the reviewed non-bootstrap importer and out of persisted config.
 const bootstrapBindings = new Map<string, { endpoint: string; apiKey: string }>();
 
+export const SECRET_PERSISTENCE_WARNING = "默认仅保存在当前页面内存。记住到此浏览器会以明文保存在浏览器配置中，不是加密；能访问浏览器配置的人及受信任扩展、脚本可读取。旧密钥在选择前仍留在磁盘；忘记只移除存储的秘密字段，本页仍可使用，不删除渠道、项目或素材。";
+type SecretChoice = { mode: "legacy" | "remember" | "forget"; binding: string; values: Record<string, string> };
+const secretChoices = new Map<string, SecretChoice>();
+const channelBinding = (channel: ModelChannel) => JSON.stringify([channel.id, channel.baseUrl, channel.apiFormat]);
+const webdavBinding = (webdav: WebdavSyncConfig) => JSON.stringify([webdav.url, webdav.directory]);
+
+export function secretPersistenceStatus(id: string) {
+    return secretChoices.get(id)?.mode || "session";
+}
+
+/** Choices apply to these exact values and recipients, never to later edits/imported secrets. */
+export function chooseSecretPersistence(id: string, mode: "remember" | "forget") {
+    const { config, webdav } = useConfigStore.getState();
+    const channel = config.channels.find((item) => `channel:${item.id}` === id);
+    if (id !== "webdav" && id !== "flat" && !channel) throw new Error("渠道不存在");
+    if (mode === "remember" && (channel ? bootstrapBindings.has(channel.id) : id === "flat" && [...bootstrapBindings.values()].some(item => item.apiKey && item.apiKey === config.apiKey))) throw new Error("URL 导入的密钥仅限本页会话内存；如需记住，请在设置中手动配置新的凭据。");
+    const options = useConfigStore.persist?.getOptions();
+    const storage = window.localStorage;
+    if (!options?.storage || !useConfigStore.persist.hasHydrated()) throw new Error("存储不可用，秘密保存方式未更改");
+    // Read before changing policy: an unreadable store cannot acknowledge forgetting.
+    const raw = storage.getItem(CONFIG_STORE_KEY);
+    if (raw !== null && typeof raw !== "string") throw new Error("存储不可读，秘密保存方式未更改");
+    const previous = secretChoices.get(id);
+    secretChoices.set(id, {
+        mode,
+        binding: channel ? channelBinding(channel) : id === "webdav" ? webdavBinding(webdav) : JSON.stringify([config.baseUrl, config.apiFormat]),
+        values: channel ? { apiKey: channel.apiKey } : id === "webdav" ? { username: webdav.username, password: webdav.password } : { apiKey: config.apiKey },
+    });
+    try {
+        const expected = JSON.stringify({ state: options.partialize!(useConfigStore.getState()), version: options.version });
+        useConfigStore.setState({});
+        if (storage.getItem(CONFIG_STORE_KEY) !== expected) throw new Error("秘密保存方式未能核验，请检查存储后重试");
+    } catch (error) {
+        if (previous) secretChoices.set(id, previous); else secretChoices.delete(id);
+        setConfigUi({}); // Notify UI without a second persistence attempt or releasing the legacy guard.
+        throw error;
+    }
+}
+
+function hydrateSecretChoices(config: AiConfig, webdav: WebdavSyncConfig) {
+    secretChoices.clear();
+    for (const channel of config.channels) {
+        if (channel.apiKey) secretChoices.set(`channel:${channel.id}`, { mode: "legacy", binding: channelBinding(channel), values: { apiKey: channel.apiKey } });
+    }
+    if (config.apiKey) secretChoices.set("flat", { mode: "legacy", binding: JSON.stringify([config.baseUrl, config.apiFormat]), values: { apiKey: config.apiKey } });
+    if (webdav.username || webdav.password) secretChoices.set("webdav", { mode: "legacy", binding: webdavBinding(webdav), values: { username: webdav.username, password: webdav.password } });
+}
+
+export function assertLegacySecretEdits(config: AiConfig, webdav: WebdavSyncConfig, replacement = false) {
+    for (const [id, choice] of secretChoices) {
+        if (choice.mode !== "legacy") continue;
+        const channel = config.channels.find((item) => `channel:${item.id}` === id);
+        const binding = id === "webdav" ? webdavBinding(webdav) : id === "flat" ? JSON.stringify([config.baseUrl, config.apiFormat]) : channel ? channelBinding(channel) : "";
+        const values = id === "webdav" ? { username: webdav.username, password: webdav.password } : { apiKey: channel?.apiKey ?? config.apiKey };
+        if (replacement || binding !== choice.binding || Object.entries(choice.values).some(([key, value]) => values[key as keyof typeof values] !== value)) {
+            throw new Error("请先为受影响的旧密钥选择「继续明文记住」或「本次会话后忘记」，再编辑接收方、密钥、删除或替换配置。");
+        }
+    }
+}
+
+function persistedSecret(id: string, binding: string, key: string, value: string, choices = secretChoices) {
+    const choice = choices.get(id);
+    if (!choice || choice.mode === "forget" || choice.binding !== binding) return undefined;
+    // An unresolved legacy value is retained byte-for-byte; a new value is not consent.
+    return choice.mode === "legacy" ? choice.values[key] : choice.values[key] === value ? value : undefined;
+}
+
+function projectConfigSecrets(config: AiConfig, webdav: WebdavSyncConfig, choices = secretChoices) {
+    const clean = withoutBootstrapKeys(config);
+    const persisted = (id: string, binding: string, key: string, value: string) => persistedSecret(id, binding, key, value, choices);
+    return {
+        config: {
+            ...clean,
+            apiKey: persisted("flat", JSON.stringify([config.baseUrl, config.apiFormat]), "apiKey", clean.apiKey),
+            channels: clean.channels.map((channel) => ({ ...channel, apiKey: bootstrapBindings.has(channel.id) ? undefined : persisted(`channel:${channel.id}`, channelBinding(channel), "apiKey", channel.apiKey) })),
+        },
+        webdav: {
+            ...webdav,
+            username: persisted("webdav", webdavBinding(webdav), "username", webdav.username),
+            password: persisted("webdav", webdavBinding(webdav), "password", webdav.password),
+        },
+    };
+}
+
+/** Prepare without mutating consent maps. Supplied values (including identical bytes) are not remember consent. */
+export function prepareImportedSecretPolicy(config: AiConfig, webdav: WebdavSyncConfig, supplied = new Map<string, string[]>()) {
+    const before = structuredClone(secretChoices);
+    const after = structuredClone(before);
+    for (const [id, choice] of after) {
+        const channel = config.channels.find(item => `channel:${item.id}` === id);
+        const binding = id === "flat" ? JSON.stringify([config.baseUrl, config.apiFormat]) : id === "webdav" ? webdavBinding(webdav) : channel ? channelBinding(channel) : "";
+        if (choice.binding !== binding) { after.delete(id); continue; }
+        const values: Record<string, string> = id === "webdav" ? { username: webdav.username, password: webdav.password } : { apiKey: channel?.apiKey ?? config.apiKey };
+        if (choice.mode === "remember") for (const key of Object.keys(choice.values)) if (choice.values[key] !== values[key]) delete choice.values[key];
+        for (const key of supplied.get(id) || []) delete choice.values[key];
+        if (!Object.keys(choice.values).length) after.delete(id);
+    }
+    const replace = (choices: typeof before) => { secretChoices.clear(); for (const [id, choice] of choices) secretChoices.set(id, structuredClone(choice)); };
+    return {
+        before, after,
+        apply: () => replace(after), restore: () => replace(before),
+        project: () => projectConfigSecrets(config, webdav, after),
+        projectBefore: (value: { config: AiConfig; webdav: WebdavSyncConfig }) => projectConfigSecrets(value.config, value.webdav, before),
+    };
+}
+
 /** Check before flattening channel identity or sending an unsaved editor draft. */
 export function assertBootstrapRecipient(config: { id?: string; baseUrl: string; apiKey: string }) {
     const binding = config.id ? bootstrapBindings.get(config.id) : undefined;
@@ -248,25 +355,66 @@ function withoutBootstrapKeys(config: AiConfig): AiConfig {
     };
 }
 
+/** Pure hydration projection; import admission must not rehydrate or mutate the live store. */
+export function hydrateConfigData(persistedState: { config?: Partial<AiConfig>; webdav?: Partial<WebdavSyncConfig> }) {
+    const persistedConfig = persistedState.config || {};
+    const config = { ...defaultConfig, ...persistedConfig };
+    if (!Array.isArray(persistedConfig.channels)) config.channels = [];
+    const channels = normalizeChannels(config);
+    return {
+        webdav: { ...defaultWebdavSyncConfig, ...persistedState.webdav },
+        config: {
+            ...config, channelMode: "local" as const, apiFormat: normalizeApiFormat(config.apiFormat), channels, models: modelOptionsFromChannels(channels),
+            imageModel: normalizeModelOptionValue(config.imageModel || config.model, channels),
+            videoModel: normalizeModelOptionValue(config.videoModel, channels),
+            textModel: normalizeModelOptionValue(config.textModel || config.model, channels),
+            audioModel: normalizeModelOptionValue(config.audioModel || defaultConfig.audioModel, channels),
+            audioVoice: config.audioVoice || defaultConfig.audioVoice, audioFormat: config.audioFormat || defaultConfig.audioFormat, audioSpeed: config.audioSpeed || defaultConfig.audioSpeed,
+            audioInstructions: config.audioInstructions || "", reasoningEffort: config.reasoningEffort || "auto",
+            videoSeconds: config.videoSeconds || "6", vquality: config.vquality || "720", videoGenerateAudio: config.videoGenerateAudio || "true", videoWatermark: config.videoWatermark || "false",
+            videoMode: config.videoMode === "reference" ? "reference" : "frames", canvasImageCount: config.canvasImageCount || "3",
+            proxyEnabled: Boolean(config.proxyEnabled), proxyUrl: config.proxyUrl || DEFAULT_LOCAL_PROXY_URL,
+            nodeRegenerateBehavior: config.nodeRegenerateBehavior === "overwrite" ? "overwrite" as const : "new-node" as const, autoFocusOnSelect: Boolean(config.autoFocusOnSelect),
+        },
+    };
+}
+
+let setConfigUi: (value: Partial<ConfigStore>) => void;
+// Capture vanilla set before persist wraps it: dialog/error UI never republishes config.
+type ConfigCreator = StateCreator<ConfigStore, [], [["zustand/persist", ReturnType<typeof projectConfigSecrets>]]>;
+function withTransientConfigUi(initializer: ConfigCreator): ConfigCreator {
+    return (set, get, api) => {
+        setConfigUi = set;
+        return initializer(set, get, api);
+    };
+}
+
 export const useConfigStore = create<ConfigStore>()(
-    persist(
+    withTransientConfigUi(persist(
         (set, get) => ({
             config: defaultConfig,
             webdav: defaultWebdavSyncConfig,
             isConfigOpen: false,
             configTab: "channels",
             shouldPromptContinue: false,
-            updateConfig: (key, value) =>
-                set((state) => ({
-                    config: {
-                        ...state.config,
-                        [key]: key === "channels" ? confineBootstrapChannels(value as ModelChannel[]) : value,
-                    },
-                })),
+            updateConfig: (key, value) => {
+                const state = get();
+                const config = { ...state.config, [key]: key === "channels" ? confineBootstrapChannels(value as ModelChannel[]) : value };
+                assertLegacySecretEdits(config, state.webdav);
+                if (key === "channels") for (const channel of state.config.channels) for (const model of channel.models) {
+                    if (model.script && config.channels.find(item => item.id === channel.id)?.models.find(item => item.name === model.name)?.script !== model.script) revokeExecutableSource("model", model.script.trim());
+                }
+                prepareImportedSecretPolicy(config, state.webdav).apply();
+                set({ config });
+            },
             importChannelCredentials: (input) => {
                 const currentConfig = get().config;
                 const result = upsertChannelCredentials(currentConfig, input);
-                if (result.config !== currentConfig) set({ config: result.config });
+                if (result.config !== currentConfig) {
+                    assertLegacySecretEdits(result.config, get().webdav);
+                    prepareImportedSecretPolicy(result.config, get().webdav).apply();
+                    set({ config: result.config });
+                }
                 return { status: result.status, channelName: result.channelName };
             },
             importBootstrapCredentials: (endpoint, apiKey) => {
@@ -283,62 +431,27 @@ export const useConfigStore = create<ConfigStore>()(
                 set((state) => ({ config: { ...state.config, channels: [...state.config.channels, channel] } }));
                 return { status: "created", channelName: channel.name };
             },
-            updateWebdavConfig: (key, value) =>
-                set((state) => ({
-                    webdav: {
-                        ...state.webdav,
-                        [key]: value,
-                    },
-                })),
+            updateWebdavConfig: (key, value) => {
+                const webdav = { ...get().webdav, [key]: value };
+                assertLegacySecretEdits(get().config, webdav);
+                prepareImportedSecretPolicy(get().config, webdav).apply();
+                set({ webdav });
+            },
             isAiConfigReady: (config, model) => isAiConfigReady(config, model),
-            openConfigDialog: (shouldPromptContinue = false, configTab = "channels") => set({ isConfigOpen: true, shouldPromptContinue, configTab }),
-            setConfigDialogOpen: (isConfigOpen) => set({ isConfigOpen }),
-            clearPromptContinue: () => set({ shouldPromptContinue: false }),
+            openConfigDialog: (shouldPromptContinue = false, configTab = "channels") => setConfigUi({ isConfigOpen: true, shouldPromptContinue, configTab }),
+            setConfigDialogOpen: (isConfigOpen) => setConfigUi({ isConfigOpen }),
+            clearPromptContinue: () => setConfigUi({ shouldPromptContinue: false }),
         }),
         {
             name: CONFIG_STORE_KEY,
-            partialize: (state) => ({ config: withoutBootstrapKeys(state.config), webdav: state.webdav }),
+            partialize: (state) => projectConfigSecrets(state.config, state.webdav),
             merge: (persisted, current) => {
-                const persistedState = (persisted || {}) as Partial<ConfigStore>;
-                const persistedConfig = (persistedState.config || {}) as Partial<AiConfig>;
-                const persistedWebdav = (persistedState.webdav || {}) as Partial<WebdavSyncConfig>;
-                const config = { ...defaultConfig, ...persistedConfig };
-                if (!Array.isArray(persistedConfig.channels)) config.channels = [];
-                const channels = normalizeChannels(config);
-                const models = modelOptionsFromChannels(channels);
-                return {
-                    ...current,
-                    webdav: { ...defaultWebdavSyncConfig, ...persistedWebdav },
-                    config: {
-                        ...config,
-                        channelMode: "local",
-                        apiFormat: normalizeApiFormat(config.apiFormat),
-                        channels,
-                        models,
-                        imageModel: normalizeModelOptionValue(config.imageModel || config.model, channels),
-                        videoModel: normalizeModelOptionValue(config.videoModel, channels),
-                        textModel: normalizeModelOptionValue(config.textModel || config.model, channels),
-                        audioModel: normalizeModelOptionValue(config.audioModel || defaultConfig.audioModel, channels),
-                        audioVoice: config.audioVoice || defaultConfig.audioVoice,
-                        audioFormat: config.audioFormat || defaultConfig.audioFormat,
-                        audioSpeed: config.audioSpeed || defaultConfig.audioSpeed,
-                        audioInstructions: config.audioInstructions || "",
-                        reasoningEffort: config.reasoningEffort || "auto",
-                        videoSeconds: config.videoSeconds || "6",
-                        vquality: config.vquality || "720",
-                        videoGenerateAudio: config.videoGenerateAudio || "true",
-                        videoWatermark: config.videoWatermark || "false",
-                        videoMode: config.videoMode === "reference" ? "reference" : "frames",
-                        canvasImageCount: config.canvasImageCount || "3",
-                        proxyEnabled: Boolean(config.proxyEnabled),
-                        proxyUrl: config.proxyUrl || DEFAULT_LOCAL_PROXY_URL,
-                        nodeRegenerateBehavior: config.nodeRegenerateBehavior === "overwrite" ? "overwrite" : "new-node",
-                        autoFocusOnSelect: Boolean(config.autoFocusOnSelect),
-                    },
-                };
+                const data = hydrateConfigData((persisted || {}) as Partial<ConfigStore>);
+                hydrateSecretChoices(data.config, data.webdav);
+                return { ...current, ...data };
             },
         },
-    ),
+    )),
 );
 
 export function useEffectiveConfig() {

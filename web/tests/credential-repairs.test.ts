@@ -8,11 +8,14 @@ Object.defineProperty(globalThis, "localStorage", { configurable: true, value: s
 Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage: storage, setTimeout, clearTimeout } });
 const { defaultConfig, defaultWebdavSyncConfig, useConfigStore } = await import("../src/stores/use-config-store");
 const { redactText, redactLogValue, logError, logInfo } = await import("../src/lib/secret-redaction");
-const { runModelPlugin, getPluginTemplates } = await import("../src/services/api/model-plugin");
-const { pollVideoGenerationTask, createVideoGenerationTask } = await import("../src/services/api/video");
+const { getPluginTemplates } = await import("../src/services/api/model-plugin");
+const { withModelConsent, runTrustedModelPlugin: runModelPlugin } = await import("./helpers/model-consent");
+const videoApi = await import("../src/services/api/video");
+const { pollVideoGenerationTask } = videoApi;
+const createVideoGenerationTask = withModelConsent(videoApi.createVideoGenerationTask);
 const { channelAxios } = await import("../src/services/api/channel-request");
-const { requestGeneration } = await import("../src/services/api/image");
-const { requestAudioGeneration } = await import("../src/services/api/audio");
+const requestGeneration = withModelConsent((await import("../src/services/api/image")).requestGeneration);
+const requestAudioGeneration = withModelConsent((await import("../src/services/api/audio")).requestAudioGeneration);
 Object.defineProperty(globalThis, "FileReader", { configurable: true, value: class {
     result = ""; onload?: () => void;
     async readAsDataURL(blob: Blob) { this.result = `data:${blob.type};base64,${Buffer.from(await blob.arrayBuffer()).toString("base64")}`; this.onload?.(); }

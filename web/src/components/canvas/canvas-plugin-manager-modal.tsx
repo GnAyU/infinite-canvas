@@ -4,7 +4,9 @@ import { AlertTriangle, Download, Puzzle, RefreshCw, Trash2 } from "lucide-react
 import { useTranslation } from "react-i18next";
 
 import { canvasThemes } from "@/lib/canvas-theme";
-import { ensurePluginsLoaded, installPluginFromUrl, setPluginEnabled, uninstallPlugin, updatePlugin } from "@/lib/canvas/plugin-loader";
+import { ensurePluginsLoaded, installPluginFromUrl, pluginTrustScope, preparePluginForEnable, setPluginEnabled, uninstallPlugin, updatePlugin } from "@/lib/canvas/plugin-loader";
+import { FULL_TRUST_WARNING } from "@/lib/executable-trust";
+import { useExecutableConsent } from "@/hooks/use-executable-consent";
 import { PLUGIN_REGISTRY_URL } from "@/constant/env";
 import { fetchOfficialPlugins, hasUpgrade, type OfficialPluginEntry } from "@/lib/canvas/plugin-registry";
 import { useThemeStore } from "@/stores/use-theme-store";
@@ -14,6 +16,7 @@ export function CanvasPluginManagerModal({ open, onClose }: { open: boolean; onC
     const { t } = useTranslation();
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const { message } = App.useApp();
+    const consent = useExecutableConsent();
     const plugins = usePluginStore((state) => state.plugins);
     const [url, setUrl] = useState("");
     const [installing, setInstalling] = useState(false);
@@ -57,7 +60,7 @@ export function CanvasPluginManagerModal({ open, onClose }: { open: boolean; onC
     const handleInstallOfficial = async (entry: OfficialPluginEntry) => {
         setBusyId(entry.id);
         try {
-            const plugin = await installPluginFromUrl(entry.url, { official: true });
+            const plugin = await installPluginFromUrl(entry.url, { official: true, id: entry.id, name: entry.name, version: entry.version, description: entry.description });
             message.success(t("canvas.plugins.installed", { name: plugin.name }));
         } catch (error) {
             message.error(t("canvas.plugins.installFailed", { error: error instanceof Error ? error.message : String(error) }));
@@ -82,7 +85,12 @@ export function CanvasPluginManagerModal({ open, onClose }: { open: boolean; onC
     // Highlight the update action when a newer remote version is available.
     const installedControls = (record: InstalledPlugin, upgradable = false) => (
         <>
-            <Switch size="small" checked={record.enabled} loading={busyId === record.id} onChange={(checked) => runOnPlugin(record, () => setPluginEnabled(record, checked), t(checked ? "canvas.plugins.enabled" : "canvas.plugins.disabled"))} />
+            <Switch size="small" checked={record.enabled} loading={busyId === record.id} onChange={(checked) => runOnPlugin(record, async () => {
+                if (!checked) return setPluginEnabled(record, false);
+                const staged = await preparePluginForEnable(record);
+                if (!await consent(pluginTrustScope(staged.id), staged.source)) throw new Error("未授权；未运行插件");
+                await setPluginEnabled(staged, true);
+            }, t(checked ? "canvas.plugins.enabled" : "canvas.plugins.disabled"))} />
             {!record.local && (
                 <>
                     <Button
@@ -214,10 +222,10 @@ export function CanvasPluginManagerModal({ open, onClose }: { open: boolean; onC
             <div className="space-y-3">
                 <div className="break-all text-xs" style={{ color: theme.node.muted }}>插件目录仅在点击刷新后请求：{PLUGIN_REGISTRY_URL}。安装或更新请求所选插件地址。</div>
                 <div className="break-all text-xs" style={{ color: theme.node.muted }}>会话加载目标：/plugins/index.json 及其列出的本地插件；开发插件：{import.meta.env.VITE_DEV_PLUGINS || "无"}；已安装插件更新地址：{plugins.map((plugin) => plugin.url).join("、") || "无"}。</div>
-                <Button type="text" onClick={() => void ensurePluginsLoaded().catch(() => message.error("插件加载失败"))}>本次会话加载已安装插件及 /plugins/index.json（会执行插件代码；开发插件也仅在此加载）</Button>
+                <Button type="text" onClick={() => void ensurePluginsLoaded().catch(() => message.error("插件发现失败"))}>下载并发现插件（仅预览，不执行；启用时另行授权当前代码）</Button>
                 <div className="flex items-start gap-2 rounded-lg border px-3 py-2 text-xs leading-5" style={{ borderColor: "#f59e0b55", background: "#f59e0b14", color: theme.node.text }}>
                     <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" />
-                    <span>{t("canvas.plugins.warning")}</span>
+                    <span>{FULL_TRUST_WARNING} 安装与更新仅保存未启用源码；含未绑定模块依赖的版本已禁用。</span>
                 </div>
                 <Tabs defaultActiveKey="official" items={tabs} />
             </div>

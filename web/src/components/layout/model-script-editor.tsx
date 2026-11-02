@@ -5,6 +5,8 @@ import { Copy } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
+import { useExecutableConsent } from "@/hooks/use-executable-consent";
+import { revokeExecutable, FULL_TRUST_WARNING } from "@/lib/executable-trust";
 import { useCopyText } from "@/hooks/use-copy-text";
 import { getPluginAuthoringPrompt, getPluginReturn, getPluginTemplates, getPluginVariables } from "@/services/api/model-plugin";
 import type { ModelCapability } from "@/stores/use-config-store";
@@ -34,6 +36,7 @@ function StepBlock({ index, title, children }: { index: number; title: string; c
 export function ModelScriptEditor({ open, capability, modelName, value, onSave, onClose }: { open: boolean; capability: ModelCapability; modelName: string; value: string; onSave: (script: string) => void; onClose: () => void }) {
     const { t } = useTranslation();
     const copyText = useCopyText();
+    const consent = useExecutableConsent();
     const [draft, setDraft] = useState(value);
     useEffect(() => {
         if (open) setDraft(value);
@@ -65,7 +68,7 @@ export function ModelScriptEditor({ open, capability, modelName, value, onSave, 
                         {t("config.scriptEditor.title", { capability: capabilityLabel })}
                         {modelName ? ` · ${modelName}` : ""}
                     </div>
-                    <div className="mt-1 text-xs text-stone-500">{t("config.scriptEditor.description")}</div>
+                    <div className="mt-1 text-xs text-stone-500">{FULL_TRUST_WARNING} 保存或预览不授予执行权；请单独授权当前内容。</div>
                 </header>
                 <div className="flex min-h-0 flex-1 overflow-hidden">
                     <aside className="flex h-full w-[420px] shrink-0 flex-col border-r border-stone-200 bg-stone-50/80 dark:border-stone-800 dark:bg-stone-900/40">
@@ -165,6 +168,8 @@ export function ModelScriptEditor({ open, capability, modelName, value, onSave, 
                         </Button>
                     </div>
                     <div className="flex items-center gap-2">
+                        <Button danger onClick={() => revokeExecutable("model")}>撤销本页全部模型脚本授权</Button>
+                        <Button disabled={!hasScript} onClick={() => void consent("model", draft.trim()).catch(() => {})}>检查并授权当前脚本</Button>
                         <Button onClick={onClose}>{t("common.cancel")}</Button>
                         <Button
                             type="primary"

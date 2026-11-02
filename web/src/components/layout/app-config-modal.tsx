@@ -11,13 +11,14 @@ import { ConfigLocalProxy } from "@/components/layout/config-local-proxy";
 import { ConfigPromptSources } from "@/components/layout/config-prompt-sources";
 import { ConfigLocalStorage } from "@/components/layout/config-local-storage";
 import type { AppLocale } from "@/i18n";
-import { exportAppConfig, importAppConfig } from "@/services/config-file";
+import { exportAppConfig, exportSensitiveAppConfig, importAppConfig, SAFE_EXPORT_WARNING } from "@/services/config-file";
+import { useConfigImportRecovery } from "@/services/config-import";
 import { syncAppDataToWebdav, type AppSyncDomainKey, type AppSyncProgressEvent } from "@/services/app-sync";
 import { testWebdavConnection, WEBDAV_MANIFEST_FILE_NAME } from "@/services/webdav-sync";
 import { audioFormatOptions, audioVoiceOptions, normalizeAudioSpeedValue } from "@/lib/audio-generation";
 import { computeMediaSize, inferMediaRatio, inferMediaScale, mediaScaleOptions, parseVideoResolution } from "@/lib/media-size";
 import { createModelChannel, modelOptionsFromChannels, normalizeModelOptionValue, selectableModelsByCapability, useConfigStore, type AiConfig, type ApiCallFormat, type ConfigTabKey, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
-import { channelPlaintextWarning } from "@/stores/use-config-store";
+import { assertLegacySecretEdits, channelPlaintextWarning, chooseSecretPersistence, SECRET_PERSISTENCE_WARNING, secretPersistenceStatus } from "@/stores/use-config-store";
 import { BACKGROUND_DISABLED } from "@/constant/runtime-config";
 import { useBackgroundStore, type BackgroundKind } from "@/stores/use-background-store";
 
@@ -53,7 +54,7 @@ function createWebdavDomainProgress(): Record<AppSyncDomainKey, WebdavDomainProg
 }
 
 export function AppConfigPanel({ showDoneButton = false, initialTab = "channels" }: { showDoneButton?: boolean; initialTab?: ConfigTabKey }) {
-    const { message } = App.useApp();
+    const { message, modal } = App.useApp();
     const { i18n, t } = useTranslation();
     const configInputRef = useRef<HTMLInputElement>(null);
     const [activeTab, setActiveTab] = useState<ConfigTabKey>(initialTab);
@@ -68,6 +69,10 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
     const webdav = useConfigStore((state) => state.webdav);
     const updateConfig = useConfigStore((state) => state.updateConfig);
     const updateWebdavConfig = useConfigStore((state) => state.updateWebdavConfig);
+    const updateWebdavField: typeof updateWebdavConfig = (key, value) => {
+        try { updateWebdavConfig(key, value); }
+        catch (error) { message.error(error instanceof Error ? error.message : "无法保存 WebDAV 设置；请先处理旧密钥选择。"); }
+    };
     const shouldPromptContinue = useConfigStore((state) => state.shouldPromptContinue);
     const setConfigDialogOpen = useConfigStore((state) => state.setConfigDialogOpen);
     const clearPromptContinue = useConfigStore((state) => state.clearPromptContinue);
@@ -78,6 +83,7 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
     useEffect(() => setActiveTab(initialTab), [initialTab]);
 
     const saveConfig = (nextConfig: AiConfig) => {
+        assertLegacySecretEdits(nextConfig, useConfigStore.getState().webdav);
         (Object.keys(nextConfig) as Array<keyof AiConfig>).forEach((key) => updateConfig(key, nextConfig[key]));
     };
 
@@ -91,7 +97,8 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
 
     const loadConfigFile = async (file: File) => {
         try {
-            const { warnings } = await importAppConfig(file);
+            const { warnings, cancelled } = await importAppConfig(file, async content => Boolean(await modal.confirm({ title: "确认替换所选设置", content, okText: "确认替换", cancelText: "取消" })));
+            if (cancelled) return;
             if (warnings.length) message.warning(warnings.join("\n"));
             else message.success(t("config.imported"));
         } catch (error) {
@@ -114,7 +121,8 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
             message.warning(t("config.channels.keepOne"));
             return;
         }
-        updateChannels(config.channels.filter((channel) => channel.id !== id));
+        try { updateChannels(config.channels.filter((channel) => channel.id !== id)); }
+        catch (error) { message.error(error instanceof Error ? error.message : "无法删除渠道"); }
     };
 
     const saveChannel = (channel: ModelChannel) => {
@@ -177,17 +185,21 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
         <>
             {config.channels.some((channel) => channelPlaintextWarning(channel.baseUrl)) ? <Alert className="mb-4" type="warning" showIcon title="HTTP 明文渠道警告（含导入的渠道）" description={config.channels.map((channel) => channelPlaintextWarning(channel.baseUrl)).find(Boolean)} /> : null}
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-stone-200 pb-3 dark:border-stone-800">
-                <div className="text-xs text-stone-500">{t("config.fileSecurity")}</div>
+                <div className="text-xs text-stone-500">{SAFE_EXPORT_WARNING}</div>
                 <div className="flex gap-2">
                     <Button icon={<Upload className="size-4" />} onClick={() => configInputRef.current?.click()}>
                         {t("config.import")}
                     </Button>
                     <Button icon={<Download className="size-4" />} onClick={exportAppConfig}>
-                        {t("config.export")}
+                        脱敏导出
+                    </Button>
+                    <Button danger onClick={() => void exportSensitiveAppConfig(async content => Boolean(await modal.confirm({ title: "完整敏感导出", content, okText: "确认本次明文导出", cancelText: "取消" })))}>
+                        完整敏感导出
                     </Button>
                     <input ref={configInputRef} type="file" accept="application/json,.json" className="hidden" onChange={(event) => event.target.files?.[0] && void loadConfigFile(event.target.files[0])} />
                 </div>
             </div>
+            <SecretPersistenceSettings />
             <Tabs
                 activeKey={activeTab}
                 onChange={(key) => setActiveTab(key as ConfigTabKey)}
@@ -342,16 +354,16 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                     </div>
                                     <div className="grid gap-4 md:grid-cols-2">
                                         <Form.Item label={t("config.webdav.url")} className="mb-4">
-                                            <Input value={webdav.url} placeholder="https://nas.example.com/webdav" onChange={(event) => updateWebdavConfig("url", event.target.value)} />
+                                            <Input value={webdav.url} placeholder="https://nas.example.com/webdav" onChange={(event) => updateWebdavField("url", event.target.value)} />
                                         </Form.Item>
                                         <Form.Item label={t("config.webdav.directory")} extra={t("config.webdav.directoryDescription", { manifest: WEBDAV_MANIFEST_FILE_NAME })} className="mb-4">
-                                            <Input value={webdav.directory} placeholder="infinite-canvas" onChange={(event) => updateWebdavConfig("directory", event.target.value)} />
+                                            <Input value={webdav.directory} placeholder="infinite-canvas" onChange={(event) => updateWebdavField("directory", event.target.value)} />
                                         </Form.Item>
                                         <Form.Item label={t("config.webdav.username")} className="mb-0">
-                                            <Input value={webdav.username} autoComplete="username" onChange={(event) => updateWebdavConfig("username", event.target.value)} />
+                                            <Input value={webdav.username} autoComplete="username" onChange={(event) => updateWebdavField("username", event.target.value)} />
                                         </Form.Item>
                                         <Form.Item label={t("config.webdav.password")} className="mb-0">
-                                            <Input.Password value={webdav.password} autoComplete="current-password" onChange={(event) => updateWebdavConfig("password", event.target.value)} />
+                                            <Input.Password value={webdav.password} autoComplete="current-password" onChange={(event) => updateWebdavField("password", event.target.value)} />
                                         </Form.Item>
                                     </div>
                                     <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -392,7 +404,10 @@ export function AppConfigModal() {
     const isConfigOpen = useConfigStore((state) => state.isConfigOpen);
     const configTab = useConfigStore((state) => state.configTab);
     const setConfigDialogOpen = useConfigStore((state) => state.setConfigDialogOpen);
+    const failure = useConfigImportRecovery((state) => state.failure);
     return (
+        <>
+        {failure ? <Alert style={{ position: "fixed", bottom: 16, left: 16, right: 16, zIndex: 900, maxHeight: "35vh", overflowY: "auto" }} type="error" showIcon title={failure.restoration === "verified" ? "导入失败，恢复已核验" : "导入失败，恢复不完整/无法核验"} description={failure.message} action={<Button onClick={() => useConfigStore.getState().openConfigDialog(false, "channels")}>检查设置并重试</Button>} /> : null}
         <Modal
             title={
                 <div>
@@ -409,7 +424,34 @@ export function AppConfigModal() {
         >
             <AppConfigPanel showDoneButton initialTab={configTab} />
         </Modal>
+        </>
     );
+}
+
+function SecretPersistenceSettings() {
+    const { config, webdav } = useConfigStore();
+    const { modal, message } = App.useApp();
+    const entries = [
+        ...config.channels.filter(channel => channel.apiKey || secretPersistenceStatus(`channel:${channel.id}`) === "legacy").map(channel => ({ id: `channel:${channel.id}`, label: channel.name })),
+        ...(config.apiKey ? [{ id: "flat", label: "通用 API 凭据" }] : []),
+        ...(webdav.username || webdav.password ? [{ id: "webdav", label: "WebDAV 凭据" }] : []),
+    ];
+    const choose = async (id: string, mode: "remember" | "forget") => {
+        const before = useConfigStore.getState();
+        if (!await modal.confirm({ title: mode === "remember" ? "记住到此浏览器（明文）" : "本次会话后忘记", content: SECRET_PERSISTENCE_WARNING, okText: mode === "remember" ? "确认明文记住当前值" : "仅移除已存秘密", cancelText: "取消" })) return;
+        const current = useConfigStore.getState();
+        if (current.config !== before.config || current.webdav !== before.webdav) { message.warning("设置已更改，请重新确认当前值。"); return; }
+        try { chooseSecretPersistence(id, mode); }
+        catch { message.error("秘密存储选择未能完成，请检查浏览器存储后重试。"); }
+    };
+    return <section className="my-4 space-y-2">
+        <Alert type={entries.some(entry => secretPersistenceStatus(entry.id) === "legacy") ? "warning" : "info"} showIcon title="秘密保存方式：默认仅本页会话" description={SECRET_PERSISTENCE_WARNING} />
+        {entries.map(({ id, label }) => <div key={id} className="flex flex-wrap items-center gap-2 text-xs">
+            <span>{label} · {secretPersistenceStatus(id) === "legacy" ? "旧明文仍在磁盘，尚未选择" : secretPersistenceStatus(id) === "remember" ? "仅已确认的原值可明文保存；编辑后需重新同意" : "仅本页会话"}</span>
+            <Button size="small" onClick={() => void choose(id, "remember")}>{secretPersistenceStatus(id) === "legacy" ? "继续明文记住" : "记住到此浏览器（明文）"}</Button>
+            <Button size="small" onClick={() => void choose(id, "forget")}>本次会话后忘记</Button>
+        </div>)}
+    </section>;
 }
 
 function withChannels(config: AiConfig, channels: ModelChannel[]): AiConfig {

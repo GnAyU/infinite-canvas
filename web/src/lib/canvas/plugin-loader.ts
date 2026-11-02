@@ -1,19 +1,23 @@
 import { registerNodeDefinitions, unregisterPluginNodes } from "@/lib/canvas/node-registry";
 import { getPluginRuntime } from "@/lib/canvas/plugin-runtime";
+import { assertExecutableTrusted, revokeExecutable } from "@/lib/executable-trust";
 import { usePluginStore, type InstalledPlugin } from "@/stores/canvas/use-plugin-store";
 import type { CanvasPlugin } from "@/types/canvas-plugin";
 import i18n from "@/i18n";
-import { logError, logInfo } from "@/lib/secret-redaction";
+import { logError } from "@/lib/secret-redaction";
 
 const cleanups = new Map<string, () => void>();
+const activeIds = new Map<string, string>();
+export const pluginTrustScope = (id: string) => `canvas:${id}`;
 
-// A remote plugin may export CanvasPlugin directly or a factory that receives runtime and returns CanvasPlugin.
-// The factory uses runtime.React so the bundle does not need its own React copy.
-async function evaluatePluginSource(source: string): Promise<CanvasPlugin> {
-    const blob = new Blob([source], { type: "text/javascript" });
-    const url = URL.createObjectURL(blob);
+// The only evaluator. Intake/preview never reaches it, including factory metadata.
+async function evaluatePluginSource(id: string, source: string): Promise<CanvasPlugin> {
+    const checkTrust = await assertExecutableTrusted(pluginTrustScope(id), source);
+    checkTrust();
+    const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
     try {
         const mod = (await import(/* @vite-ignore */ url)) as { default?: unknown; plugin?: unknown };
+        checkTrust(); // Module execution already started; a revoked factory/setup must not start afterward.
         const exported = mod.default ?? mod.plugin;
         const plugin = typeof exported === "function" ? (exported as (runtime: unknown) => unknown)(getPluginRuntime()) : exported;
         assertPlugin(plugin);
@@ -29,21 +33,22 @@ function assertPlugin(plugin: unknown): asserts plugin is CanvasPlugin {
     if (!value.id || !Array.isArray(value.nodes) || !value.nodes.length) throw new Error(i18n.t("canvas.pluginErrors.missingFields"));
 }
 
-export function activatePlugin(plugin: CanvasPlugin) {
+function activatePlugin(recordId: string, plugin: CanvasPlugin) {
+    activeIds.set(recordId, plugin.id);
     registerNodeDefinitions(plugin.nodes, plugin.id);
     const runtime = getPluginRuntime();
     const disposers: Array<() => void> = [];
-    // Inject declared styles when enabled and remove them when disabled or uninstalled.
     if (plugin.css) disposers.push(runtime.injectCSS(plugin.css, plugin.id));
     const cleanup = plugin.setup?.(runtime);
     if (typeof cleanup === "function") disposers.push(cleanup);
-    if (disposers.length) cleanups.set(plugin.id, () => disposers.forEach((dispose) => dispose()));
+    if (disposers.length) cleanups.set(recordId, () => disposers.forEach(dispose => dispose()));
 }
 
-export function deactivatePlugin(pluginId: string) {
-    cleanups.get(pluginId)?.();
-    cleanups.delete(pluginId);
-    unregisterPluginNodes(pluginId);
+export function deactivatePlugin(recordId: string) {
+    cleanups.get(recordId)?.();
+    cleanups.delete(recordId);
+    unregisterPluginNodes(activeIds.get(recordId) || recordId);
+    activeIds.delete(recordId);
 }
 
 async function fetchPluginSource(url: string) {
@@ -52,119 +57,86 @@ async function fetchPluginSource(url: string) {
     return response.text();
 }
 
-// Add a cache-busting parameter so watch builds load the latest output.
 function withCacheBust(url: string) {
     return `${url}${url.includes("?") ? "&" : "?"}t=${Date.now()}`;
 }
 
-// Install or replace a plugin from a URL and enable it immediately.
-// bustCache bypasses HTTP/CDN caches during upgrades while persisting a clean URL without the timestamp query.
-export async function installPluginFromUrl(url: string, opts?: { official?: boolean; bustCache?: boolean }) {
-    const source = await fetchPluginSource(opts?.bustCache ? withCacheBust(url) : url);
-    const plugin = await evaluatePluginSource(source);
-    deactivatePlugin(plugin.id); // Replace the previous version.
-    usePluginStore.getState().upsert({ id: plugin.id, name: plugin.name || plugin.id, version: plugin.version || "0.0.0", description: plugin.description, url, source, enabled: true, official: opts?.official });
-    activatePlugin(plugin);
-    return plugin;
+// Metadata comes only from inert catalog fields or the URL, never from evaluating code.
+function stagePlugin(url: string, source: string, opts?: { id?: string; name?: string; version?: string; description?: string; official?: boolean; local?: boolean }) {
+    const store = usePluginStore.getState();
+    const existing = store.plugins.find(item => item.url === url);
+    const id = existing?.id || opts?.id || new URL(url, "https://local.invalid").pathname.split("/").pop()?.replace(/\.m?js$/, "") || url;
+    const collision = store.plugins.find(item => item.id === id && item.url !== url);
+    if (collision) throw new Error("插件标识冲突，请先卸载同名插件；未执行源码。");
+    deactivatePlugin(id);
+    if (existing?.source !== source) revokeExecutable(pluginTrustScope(id));
+    store.upsert({ id, name: opts?.name || existing?.name || id, version: opts?.version || existing?.version || "0.0.0", description: opts?.description || existing?.description, url, source, enabled: false, official: opts?.official ?? existing?.official, local: opts?.local ?? existing?.local });
+    return usePluginStore.getState().plugins.find(item => item.id === id)!;
+}
+
+// Install/update only downloads and stages disabled source. Enable is a separate consent action.
+export async function installPluginFromUrl(url: string, opts?: { official?: boolean; bustCache?: boolean; id?: string; name?: string; version?: string; description?: string; local?: boolean }) {
+    return stagePlugin(url, await fetchPluginSource(opts?.bustCache ? withCacheBust(url) : url), opts);
 }
 
 export async function updatePlugin(record: InstalledPlugin) {
-    // Upgrades must fetch the latest output and therefore always bypass caches.
-    return installPluginFromUrl(record.url, { official: record.official, bustCache: true });
+    return installPluginFromUrl(record.url, { ...record, bustCache: true });
+}
+
+export async function preparePluginForEnable(record: InstalledPlugin) {
+    const current = usePluginStore.getState().plugins.find(item => item.id === record.id);
+    if (!current) throw new Error("插件已移除");
+    return current.local ? installPluginFromUrl(current.url, { ...current, bustCache: true }) : current;
 }
 
 export async function setPluginEnabled(record: InstalledPlugin, enabled: boolean) {
-    usePluginStore.getState().setEnabled(record.id, enabled);
     if (!enabled) {
+        revokeExecutable(pluginTrustScope(record.id));
+        usePluginStore.getState().setEnabled(record.id, false);
         deactivatePlugin(record.id);
         return;
     }
-    // Reload local plugins from their URL when enabled because the cached source may be stale.
-    const source = record.local ? await fetchPluginSource(withCacheBust(record.url)) : record.source;
-    const plugin = await evaluatePluginSource(source);
-    activatePlugin(plugin);
+    // Re-fetch local code at the execution boundary. A changed response cannot reuse consent.
+    const current = await preparePluginForEnable(record);
+    const source = current.source;
+    const plugin = await evaluatePluginSource(current.id, source);
+    // Revocation/replacement during module loading must also prevent activation.
+    const checkTrust = await assertExecutableTrusted(pluginTrustScope(current.id), source);
+    checkTrust();
+    if (usePluginStore.getState().plugins.find(item => item.id === current.id)?.source !== source) throw new Error("插件内容已更改，请重新检查授权");
+    deactivatePlugin(current.id);
+    activatePlugin(current.id, plugin);
+    usePluginStore.getState().setEnabled(current.id, true);
 }
 
 export function uninstallPlugin(id: string) {
+    revokeExecutable(pluginTrustScope(id));
     deactivatePlugin(id);
     usePluginStore.getState().remove(id);
 }
 
-let loaded = false;
-
-// Only the explicit manager load button calls this. Never call from startup or canvas mount.
+// Intentional manager discovery only; cached enabled/imported flags never authorize evaluation.
 export async function ensurePluginsLoaded() {
-    if (loaded) return;
-    loaded = true;
-    await usePluginStore.persist.rehydrate();
-    await loadLocalPlugins(); // Discover disabled local plugins first, then activate all enabled records.
-    const records = usePluginStore.getState().plugins.filter((record) => record.enabled);
-    await Promise.all(
-        records.map(async (record) => {
-            try {
-                // Local plugins use the latest output; other plugins use their cached source.
-                const source = record.local ? await fetchPluginSource(withCacheBust(record.url)) : record.source;
-                activatePlugin(await evaluatePluginSource(source));
-            } catch (error) {
-                logError(`[plugin] Failed to load: ${record.id}`, error);
-            }
-        }),
-    );
-    await loadDevPlugins();
+    if (!usePluginStore.persist.hasHydrated()) await usePluginStore.persist.rehydrate();
+    await loadLocalPlugins();
+    const raw = import.meta.env?.VITE_DEV_PLUGINS;
+    for (const url of raw?.split(",").map(item => item.trim()).filter(Boolean) || []) {
+        try { await installPluginFromUrl(url, { local: true, bustCache: true }); }
+        catch (error) { logError("[plugin] Dev plugin discovery failed", error); }
+    }
 }
 
-// Discover local plugins from web/public/plugins, add them disabled, and expose them in the manager without a URL.
-// Refresh metadata and source for existing records while preserving the enabled flag so persisted versions stay current.
 async function loadLocalPlugins() {
     let urls: unknown;
     try {
         const response = await fetch("/plugins/index.json");
         if (!response.ok) return;
         urls = await response.json();
-    } catch {
-        return; // Skip when no local manifest exists, such as production builds without plugins.
+    } catch { return; }
+    if (!Array.isArray(urls)) return;
+    for (const url of urls) {
+        if (typeof url !== "string") continue;
+        try { await installPluginFromUrl(url, { local: true, bustCache: true }); }
+        catch (error) { logError("[plugin] Local plugin discovery failed", error); }
     }
-    if (!Array.isArray(urls) || !urls.length) return;
-    const store = usePluginStore.getState();
-    await Promise.all(
-        urls.map(async (url: string) => {
-            try {
-                const source = await fetchPluginSource(withCacheBust(url));
-                const plugin = await evaluatePluginSource(source);
-                const existing = store.plugins.find((item) => item.id === plugin.id);
-                store.upsert({
-                    id: plugin.id,
-                    name: plugin.name || plugin.id,
-                    version: plugin.version || "0.0.0",
-                    description: plugin.description,
-                    url,
-                    source,
-                    enabled: existing?.enabled ?? false, // Preserve the user setting; new discoveries default to disabled.
-                    local: true,
-                });
-            } catch (error) {
-                logError(`[plugin] Failed to discover local plugin: ${url}`, error);
-            }
-        }),
-    );
-}
-
-// Development URLs also require the intentional manager load action; reload alone never executes them.
-async function loadDevPlugins() {
-    const raw = import.meta.env.VITE_DEV_PLUGINS;
-    if (!raw) return;
-    const urls = raw.split(",").map((item) => item.trim()).filter(Boolean);
-    await Promise.all(
-        urls.map(async (url) => {
-            try {
-                const source = await fetchPluginSource(withCacheBust(url));
-                const plugin = await evaluatePluginSource(source);
-                deactivatePlugin(plugin.id);
-                activatePlugin(plugin);
-                logInfo(`[plugin] Dev plugin loaded: ${plugin.id} (${url})`);
-            } catch (error) {
-                logError(`[plugin] Failed to load dev plugin: ${url}`, error);
-            }
-        }),
-    );
 }

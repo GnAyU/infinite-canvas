@@ -7,7 +7,8 @@ Object.defineProperty(globalThis, "window", { configurable: true, value: { local
 afterAll(() => { if (originalWindow) Object.defineProperty(globalThis, "window", originalWindow); else Reflect.deleteProperty(globalThis, "window"); });
 const { defaultConfig } = await import("../src/stores/use-config-store");
 const { pollVideoGenerationTask } = await import("../src/services/api/video");
-const { runModelPlugin, getPluginTemplates } = await import("../src/services/api/model-plugin");
+const { getPluginTemplates } = await import("../src/services/api/model-plugin");
+const { runTrustedModelPlugin: runModelPlugin } = await import("./helpers/model-consent");
 const key = "SYNTHETIC_MEDIA_CANARY";
 const baseUrl = "https://channel.invalid/prefix";
 const channel = { ...defaultConfig.channels[0], baseUrl, apiKey: key, apiFormat: "gemini" as const, models: [{ name: "veo", capability: "video" as const }] };

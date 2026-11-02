@@ -114,8 +114,8 @@ async def exercise(browser, force_off=False):
         check('fragment credentials scrub before runtime config and never persist', await page.evaluate('window.__earlyConfigLocation') == ORIGIN + '/?keep=functional#tab=retained' and CANARIES[1] not in await page.evaluate('JSON.stringify(localStorage)'))
     # Real file import of legacy settings/flags must not grant consent.
     await page.evaluate('''async source => {
-      const current=q.c.useConfigStore.getState();const data={app:'infinite-canvas',version:1,config:{...current.config,analyticsEnabled:true,versionCheckEnabled:true},webdav:current.webdav,promptSources:{sources:[...q.p.usePromptSourceStore.getState().sources.filter(s=>s.builtIn).map(s=>({...s,enabled:false})),source],schedule:{intervalMinutes:30,lastFetchedAt:''},consent:{analytics:true,version:true,promptFeed:true}}};
-      await q.f.importAppConfig(new File([JSON.stringify(data)],'synthetic-legacy.json',{type:'application/json'}));
+      const current=q.c.useConfigStore.getState();const data={app:'infinite-canvas',version:1,exportedAt:new Date().toISOString(),config:{...current.config,analyticsEnabled:true,versionCheckEnabled:true},webdav:current.webdav,promptSources:{sources:[...q.p.usePromptSourceStore.getState().sources.filter(s=>s.builtIn).map(s=>({...s,enabled:false})),source],schedule:{intervalMinutes:30,lastFetchedAt:''},consent:{analytics:true,version:true,promptFeed:true}}};
+      await q.f.importAppConfig(new File([JSON.stringify(data)],'synthetic-legacy.json',{type:'application/json'}),async()=>true);
     }''', SOURCE)
     await page.evaluate('window.__tick();window.__advance();window.__tick()')
     await page.wait_for_timeout(400)
@@ -224,9 +224,9 @@ async def exercise(browser, force_off=False):
     check('explicit catalog refresh fetches only the disclosed mock manifest', [r['url'] for r in nonessential(before)] == ['https://plugins.invalid/catalog.json'])
     check('official install destination is visible before installation', await dialog.get_by_text('https://plugins.invalid/official.js', exact=True).is_visible())
     before = len(REPORT['requests'])
-    await dialog.get_by_role('button', name=re.compile('本次会话加载已安装插件')).click()
+    await dialog.get_by_role('button', name=re.compile('下载并发现插件')).click()
     await page.wait_for_timeout(600)
-    check('explicit manager load discovers local and dev plugins and runs synthetic code', await page.evaluate('window.__qaPluginRuns') == 2 and len(nonessential(before)) == 3 and all(r['kind'] == 'plugin-manager' for r in nonessential(before)))
+    check('explicit manager discovery downloads local/dev metadata without executing source', not await page.evaluate('window.__qaPluginRuns') and len(nonessential(before)) == 3 and all(r['kind'] == 'plugin-manager' for r in nonessential(before)))
     await page.evaluate("async source => {const {usePluginStore}=await import('/src/stores/canvas/use-plugin-store.ts');usePluginStore.getState().upsert({id:'synthetic-cached',name:'Synthetic cached',version:'0.0.0',url:'https://plugins.invalid/cached.js',source,enabled:true})}", PLUGIN)
     before = len(REPORT['requests'])
     await page.reload(wait_until='networkidle')

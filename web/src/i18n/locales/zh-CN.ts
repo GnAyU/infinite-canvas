@@ -467,7 +467,7 @@ export default {
             },
             runtime: { requestFailed: "请求失败（{{status}}）", urlRequired: "JSON URL 不能为空", fetchFailed: "「{{name}}」拉取失败：{{error}}", noPrompts: "「{{name}}」未解析到有效提示词", invalidRoot: "「{{name}}」格式错误：根节点必须是数组" },
         },
-        fileSecurity: "JSON 文件包含 API Key 和 WebDAV 凭据，请妥善保管。",
+        fileSecurity: "默认导出省略凭据和可执行源码，其他用户文本仍须人工检查；完整敏感导出每次单独确认明文及分享风险。",
         import: "导入配置",
         export: "导出配置",
         imported: "配置与用户偏好已导入",
@@ -586,7 +586,7 @@ export default {
         },
         webdav: {
             title: "WebDAV 同步",
-            description: "同步画布、我的资产、生成记录和本地媒体文件，不包含 AI API Key。开启本地代理时经本机代理转发，否则浏览器直连 WebDAV。",
+            description: "手动同步画布、我的资产、生成记录和本地媒体文件，不包含 AI API Key。当前配置不支持伴生服务，浏览器仅直连 HTTPS WebDAV；新凭据默认仅本页内存，明文记住须单独确认。同步一致性仍待独立验证。",
             lastSynced: "上次同步 {{time}}",
             neverSynced: "尚未同步",
             url: "WebDAV 地址",

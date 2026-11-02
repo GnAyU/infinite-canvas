@@ -5,7 +5,7 @@ Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
 Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage: globalThis.localStorage } });
 afterAll(() => { if (originalWindow) Object.defineProperty(globalThis, "window", originalWindow); else Reflect.deleteProperty(globalThis, "window"); });
-const { runModelPlugin } = await import("../src/services/api/model-plugin");
+const { runTrustedModelPlugin: runModelPlugin } = await import("./helpers/model-consent");
 const { defaultConfig } = await import("../src/stores/use-config-store");
 const originalAdapter = axios.defaults.adapter;
 axios.defaults.adapter = async (request) => {

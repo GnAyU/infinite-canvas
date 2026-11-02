@@ -6,9 +6,12 @@ const storage = { getItem: () => null, setItem: () => {}, removeItem: () => {} }
 Object.defineProperty(globalThis, "localStorage", { configurable: true, value: storage });
 Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage: storage } });
 const { defaultConfig } = await import("../src/stores/use-config-store");
-const { createVideoGenerationTask, storeGeneratedVideo } = await import("../src/services/api/video");
-const { requestGeneration } = await import("../src/services/api/image");
-const { requestAudioGeneration } = await import("../src/services/api/audio");
+const { withModelConsent } = await import("./helpers/model-consent");
+const videoApi = await import("../src/services/api/video");
+const { storeGeneratedVideo } = videoApi;
+const createVideoGenerationTask = withModelConsent(videoApi.createVideoGenerationTask);
+const requestGeneration = withModelConsent((await import("../src/services/api/image")).requestGeneration);
+const requestAudioGeneration = withModelConsent((await import("../src/services/api/audio")).requestAudioGeneration);
 const key = "SYNTHETIC_RETURN_CANARY";
 const baseUrl = "https://channel.invalid/prefix";
 const configFor = (apiFormat: "openai" | "gemini" = "openai", script?: string) => ({ ...defaultConfig, baseUrl, apiKey: key, apiFormat, model: "default::test", count: "1", channels: [{ ...defaultConfig.channels[0], baseUrl, apiKey: key, apiFormat, models: [{ name: "test", capability: "video" as const, script }] }] });

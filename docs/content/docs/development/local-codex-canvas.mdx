@@ -5,7 +5,21 @@ description: Interaction between Canvas Agent, MCP, SSE, and browser canvas stat
 
 # How Local Codex Connects to the Canvas
 
-Codex does not control the browser DOM or simulate mouse actions. A local `Canvas Agent` bridges Codex tools and the React state that owns the canvas.
+## Current web-only configuration
+
+Canvas Agent and the local proxy are **unsupported in this configuration**. The web app does not connect, probe or auto-reconnect to companions; imported flags and connection links do not enable them. Companion findings are mitigated by non-use, not repaired. Stop separately running companions and explicitly forget obsolete local connection values if no longer needed; existing residual tokens are not silently erased.
+
+Model scripts and canvas plugins are opt-in **fully trusted page code**, not a sandbox. Approved code can read persisted provider/WebDAV secrets, any residual Agent token, page data and session-memory keys, issue requests and alter the app. Content digests identify exact bytes, not publisher authenticity. Import, discovery and preview do not execute code. Changed content needs renewed consent; reload requires consent again. Versions with unbound executable module dependencies are disabled, including the markdown `marked@14` and panorama `three@0.180.0` CDN cases.
+
+New API/WebDAV credentials stay in page-session memory by default. Explicit “remember on this browser” stores the confirmed values in plaintext, not encrypted storage: browser-profile access and trusted extensions/scripts can expose them. Legacy plaintext remains usable and stored until an explicit keep/forget choice. Forget removes stored secret fields, not channels, projects, assets or media; it cannot undo earlier disclosure or revoke code that already ran.
+
+Default config exports omit credential fields, credential-bearing addresses and executable bodies; review remaining user text before sharing. Full sensitive export needs separate plaintext/share-risk confirmation each time. Config import does not grant execution or remembering consent. An import missing a required recipient address is rejected as a whole before writes; re-export with the address or manually reconfigure the channel. Supported omitted-secret imports preserve credentials only for unchanged exact identity and recipient, including path. Explicit empty strings clear the corresponding secret.
+
+## Historical upstream behavior — not supported instructions
+
+The remainder describes **Historical upstream behavior**, not the current supported integration or an assurance about companion security. Do not use these historical token-bearing routes as connection instructions.
+
+Historically, Codex did not control the browser DOM or simulate mouse actions. A local `Canvas Agent` bridged Codex tools and the React state that owned the canvas.
 
 ```text
 Codex or browser side panel
@@ -43,12 +57,8 @@ For a node creation, Codex calls an MCP tool, Canvas Agent converts it to `canva
 
 Writes are automatically confirmed by default. Switch the side panel to manual confirmation to approve each write. The frontend also stores the snapshot before the latest Agent operation so it can be undone.
 
-## Security boundary
+## Historical security notes, not current guarantees
 
-- Canvas Agent binds to `127.0.0.1` by default.
-- Browser connections require the generated token and are bound to the first accepted origin.
-- Codex does not directly access the DOM or own the canvas state.
-- The hosted website does not store the local Codex login, API keys, or local file permissions.
-- The browser remains responsible for executing writes, approvals, undo, and permission controls.
+Loopback binding, token checks and browser confirmations in the historical design are not a sandbox, independent origin enrollment or proof that companion risks were fixed. This fork does not support companions. Do not infer that hosted page code cannot access keys: provider/WebDAV secrets may remain as legacy plaintext or be explicitly remembered in the browser, and fully trusted page code can also access session-memory keys and residual tokens. Existing historical approval/undo controls do not change that boundary.
 
 In short, reads flow from browser snapshots through Canvas Agent and MCP to Codex; writes flow from Codex through MCP and SSE back to browser React state.

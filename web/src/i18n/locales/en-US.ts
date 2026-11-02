@@ -467,7 +467,7 @@ export default {
             },
             runtime: { requestFailed: "Request failed ({{status}})", urlRequired: "JSON URL is required", fetchFailed: "Failed to fetch “{{name}}”: {{error}}", noPrompts: "No valid prompts were parsed from “{{name}}”", invalidRoot: "Invalid “{{name}}” format: the root value must be an array" },
         },
-        fileSecurity: "The JSON file contains API keys and WebDAV credentials. Keep it secure.",
+        fileSecurity: "Default exports omit credentials and executable source; review remaining user text. Each full sensitive export separately confirms plaintext and sharing risk.",
         import: "Import settings",
         export: "Export settings",
         imported: "Settings and preferences imported",
@@ -586,7 +586,7 @@ export default {
         },
         webdav: {
             title: "WebDAV sync",
-            description: "Sync canvases, assets, generation history, and local media files. AI API keys are excluded. Requests go through the local proxy when it is on; otherwise the browser connects to WebDAV directly.",
+            description: "Manually sync canvases, assets, generation history, and local media files, excluding AI API keys. Companions are unsupported in this configuration: the browser connects directly to HTTPS WebDAV only. New credentials stay in page memory unless plaintext remembering is separately confirmed. Sync consistency remains independently unverified.",
             lastSynced: "Last synced {{time}}",
             neverSynced: "Not synced yet",
             url: "WebDAV URL",

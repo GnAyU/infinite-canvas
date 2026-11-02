@@ -53,7 +53,7 @@ description: 当前版本已实现但仍需人工验证的变更项
 - Canvas Agent Debug：普通启动应通过公共 logger 输出 Info、Warn 和 Error 日志；使用 `npx -y @basketikun/canvas-agent@latest --debug` 启动后还应输出 Debug 日志并显示日志文件路径，终端统一采用“`YYYY-MM-DD HH:mm:ss` 级别 消息 详情”的纯文本单行格式，`~/.infinite-canvas/logs/` 下应按启动日期生成相同格式的 `canvas-agent-YYYY-MM-DD.log`，同一天多次启动应追加到同一文件；日志中不应出现连接 token 或图片 Data URL 原文。
 - Canvas Agent 凭据脱敏：Codex 与 Claude CLI 的 stderr 包含 Bearer token、`sk-` 密钥、显式 API key/token/authorization 赋值、ANSI 样式或跨输出分片的凭据时，调试日志和网页诊断事件均不应出现明文；普通 stderr 文本应保持不变。
 - Canvas Agent 配置权限：在 Linux 和 macOS 上保存配置后，`~/.infinite-canvas` 权限应为 `0700`，`canvas-agent.json` 权限应为 `0600`，已有的宽松权限也应被纠正；配置应能继续正常读写，Windows 启动不受影响。
-- Canvas Agent URL 自动连接：链接应在 `#` 后传递 `agentUrl` 和 `agentToken`，进入或选择具体画布时继续保留，读取后立即从地址栏移除，并可连接有效的本机、局域网或远程 HTTP(S) Agent 地址且不主动展开设置面板；缺少参数或地址无效时应展开设置并显示错误。
+- Canvas Agent URL 自动连接（上游历史行为，当前配置不支持）：构造含 Agent 地址/令牌的查询或片段链接、旧状态恢复及刷新均不得启动、探测或连接伴生服务，也不得新增持久化令牌。Agent bootstrap 应被丢弃；不要生成或分享令牌链接。
 - 图片 API 模型参数：`gpt-image-*` 的生成和编辑请求不应发送 `response_format`，`dall-e-*` 请求仍应发送 `response_format: "b64_json"`。
 - 图片外链持久化：画布和生图工作台对图片接口返回的远程 URL 应只下载一次，经图片解码校验后保存到 IndexedDB；返回 `200` 但内容不是图片时应失败，下载期间停止画布生成后不得保存或应用结果；浏览器因 CORS 无法读取但图片仍可显示时，应保留原 URL 且不生成空 `storageKey`，插件调用在外链可读取时仍应收到 Data URL。
 - 多参考图编辑：OpenAI 格式在多张参考图时应使用重复的 `image[]` 表单字段提交文件，单张参考图仍使用 `image`；新建的 OpenAI 图片脚本应使用相同字段名。Gemini 渠道和已经保存的自定义脚本不受影响。

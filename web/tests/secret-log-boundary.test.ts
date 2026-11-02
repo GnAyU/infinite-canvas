@@ -6,7 +6,7 @@ Object.defineProperty(globalThis, "window", { configurable: true, value: { local
 afterAll(() => { if (originalWindow) Object.defineProperty(globalThis, "window", originalWindow); else Reflect.deleteProperty(globalThis, "window"); });
 const { defaultConfig, defaultWebdavSyncConfig, useConfigStore } = await import("../src/stores/use-config-store");
 const { emitCanvasEvent, onCanvasEvent } = await import("../src/lib/canvas/canvas-event-bus");
-const { runModelPlugin } = await import("../src/services/api/model-plugin");
+const { runTrustedModelPlugin: runModelPlugin } = await import("./helpers/model-consent");
 const key = "SYNTHETIC_LOG_KEY";
 const password = "SYNTHETIC_DAV_PASSWORD";
 const username = "SYNTHETIC_DAV_USER";

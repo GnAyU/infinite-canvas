@@ -6,7 +6,9 @@ import { useBackgroundStore } from "../src/stores/use-background-store";
 const oldCreate = localforage.createInstance;
 const oldFetch = globalThis.fetch;
 const oldStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+const oldWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
 Object.defineProperty(globalThis, "localStorage", { configurable: true, value: { getItem: () => null, setItem() {}, removeItem() {} } });
+Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage: globalThis.localStorage } });
 const cache = new Map<string, unknown>();
 const requests: string[] = [];
 let beforeRead: (() => void) | undefined;
@@ -15,7 +17,7 @@ globalThis.fetch = (async (url: string | URL | Request) => {
     requests.push(String(url));
     return Response.json([{ id: "synthetic", title: "Synthetic", prompt: "Test", coverUrl: "https://images.invalid/cover.png" }]);
 }) as typeof fetch;
-afterAll(() => { localforage.createInstance = oldCreate; globalThis.fetch = oldFetch; useBackgroundStore.getState().setConsent("promptFeed", false); if (oldStorage) Object.defineProperty(globalThis, "localStorage", oldStorage); else Reflect.deleteProperty(globalThis, "localStorage"); });
+afterAll(() => { localforage.createInstance = oldCreate; globalThis.fetch = oldFetch; useBackgroundStore.getState().setConsent("promptFeed", false); if (oldStorage) Object.defineProperty(globalThis, "localStorage", oldStorage); else Reflect.deleteProperty(globalThis, "localStorage"); if (oldWindow) Object.defineProperty(globalThis, "window", oldWindow); else Reflect.deleteProperty(globalThis, "window"); });
 
 test("prompt cache reads and due ticks cannot fetch without consent; manual refresh stays usable", async () => {
     const api = await import("../src/services/api/prompts");

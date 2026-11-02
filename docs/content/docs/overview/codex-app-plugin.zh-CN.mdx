@@ -5,6 +5,8 @@ description: 在 Codex App 中安装并使用 Infinite Canvas 插件
 
 # Codex App 插件
 
+> 当前 Web 配置不支持 Canvas Agent 或本地代理，不启动、探测或自动连接伴生服务。下文安装与工作流仅为上游历史行为说明，不是本配置的操作指引。不要生成或分享带连接令牌的链接；网页会丢弃 Agent bootstrap，不会据此连接。
+
 Infinite Canvas 提供了一个 Codex App 插件，用来把 Codex 和本地 Canvas Agent 连接起来。安装后，你可以直接在 Codex 中说“打开 Infinite Canvas”，让 Codex 打开画布、读取节点、创建节点并触发生成流程。
 
 插件源码位于仓库的 `plugins/infinite-canvas/` 目录。
@@ -88,7 +90,7 @@ codex plugin add infinite-canvas@infinite-canvas-local
 打开 Infinite Canvas 新建画布 并连接好Codex
 ```
 
-插件会启动本地 Canvas Agent，读取连接地址和 token，然后在右侧打开 `https://canvas.best/` 并自动新建、连接画布。只有明确要求使用本地项目时，插件才会启动本地前端。
+上游历史行为曾由插件启动本地 Canvas Agent 并打开托管画布后自动连接；当前配置不支持这条自动连接链路，不能通过安装插件或旧链接恢复它。
 
 画布打开后可以继续让 Codex 操作画布：
 
@@ -131,10 +133,4 @@ bun run dev
 npx -y @basketikun/canvas-agent@latest
 ```
 
-从 Agent 输出或 `http://127.0.0.1:17371/config` 读取本地地址和 token 后，打开：
-
-```text
-<画布网页地址>/canvas?mode=new#agentUrl=<Local URL>&agentToken=<Connect token>
-```
-
-`mode=new` 会让网页自动创建具体画布并连接本地 Agent，不需要手动点击“新建画布”。
+上述排查命令仅记录上游历史行为。当前配置不支持通过地址栏、片段参数或旧连接信息连接 Agent；不提供带 token 的打开链接，`mode=new` 也不授予伴生服务连接权。
